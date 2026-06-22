@@ -248,9 +248,14 @@ async def _do_browser(action: str, target: str, value: str, ws: WebSocket, ctx: 
 
     if 'browser' not in ctx:
         await ws.send_json({'type': 'log', 'message': '  Launching browser...'})
-        ctx['browser'] = await ctx['playwright'].chromium.launch(headless=False)
+        os_name = platform.system().lower()
+        launch_kwargs = {'headless': False}
+        if os_name == 'windows':
+            launch_kwargs['channel'] = 'msedge'  # Use installed Edge on Windows
+        ctx['browser'] = await ctx['playwright'].chromium.launch(**launch_kwargs)
         ctx['page'] = await ctx['browser'].new_page()
-        await ws.send_json({'type': 'log', 'message': '  Browser ready.'})
+        browser_name = 'Edge' if os_name == 'windows' else 'Chromium'
+        await ws.send_json({'type': 'log', 'message': f'  {browser_name} ready.'})
 
     page = ctx['page']
 
