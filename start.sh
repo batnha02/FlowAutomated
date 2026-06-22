@@ -22,4 +22,4 @@ echo "  AutoStep running on http://localhost:${PORT}"
 echo "  Default login: admin / 123456"
 echo ""
 
-venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port "$PORT" --reload
+venv/bin/python run_server.py --port "$PORT" --reload
