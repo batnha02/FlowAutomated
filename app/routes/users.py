@@ -6,7 +6,7 @@ from app.models import CreateUserRequest, UpdateUserRequest
 router = APIRouter()
 
 
-@router.get('/')
+@router.get('')
 def list_users(admin: dict = Depends(require_admin)):
     conn = get_conn()
     rows = conn.execute(
@@ -16,7 +16,7 @@ def list_users(admin: dict = Depends(require_admin)):
     return [dict(r) for r in rows]
 
 
-@router.post('/', status_code=201)
+@router.post('', status_code=201)
 def create_user(body: CreateUserRequest, admin: dict = Depends(require_admin)):
     if not body.username.strip() or not body.password.strip():
         raise HTTPException(status_code=400, detail='Username and password required')

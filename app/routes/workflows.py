@@ -22,7 +22,7 @@ def _fmt(row) -> dict:
     }
 
 
-@router.get('/')
+@router.get('')
 def list_workflows(user: dict = Depends(get_current_user)):
     conn = get_conn()
     rows = conn.execute('''
@@ -49,7 +49,7 @@ def get_workflow(wf_id: str, user: dict = Depends(get_current_user)):
     return _fmt(row)
 
 
-@router.post('/', status_code=201)
+@router.post('', status_code=201)
 def create_workflow(body: WorkflowCreate, user: dict = Depends(get_current_user)):
     if not body.name.strip():
         raise HTTPException(status_code=400, detail='Name is required')
