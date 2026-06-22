@@ -3,6 +3,7 @@ from pydantic import BaseModel
 
 ActionType = Literal[
     'left_click', 'right_click', 'double_click', 'keyboard_input', 'open_app',
+    'hot_key', 'close_app', 'move_window',
     'browser_click', 'browser_type', 'browser_navigate', 'browser_wait',
     'browser_screenshot', 'delay',
 ]

@@ -3,17 +3,20 @@
 /* ═══════════════════════════ CONSTANTS ═══════════════════════════════════════ */
 
 const ACTION_TYPES = {
-  left_click:          { label: 'Left Click',           group: 'Windows GUI',          targetLabel: 'Coordinates (x,y)',         valueLabel: '',             badgeClass: 'ab-gui' },
-  right_click:         { label: 'Right Click',          group: 'Windows GUI',          targetLabel: 'Coordinates (x,y)',         valueLabel: '',             badgeClass: 'ab-gui' },
-  double_click:        { label: 'Double Click',         group: 'Windows GUI',          targetLabel: 'Coordinates (x,y)',         valueLabel: '',             badgeClass: 'ab-gui' },
-  keyboard_input:      { label: 'Keyboard Input',       group: 'Windows GUI',          targetLabel: 'Window Title (optional)',   valueLabel: 'Text to Type', badgeClass: 'ab-keyboard' },
-  open_app:            { label: 'Open App',             group: 'Windows GUI',          targetLabel: 'App Path / Command',        valueLabel: '',             badgeClass: 'ab-gui' },
-  browser_click:       { label: 'Browser: Click',       group: 'Browser (Playwright)', targetLabel: 'CSS Selector / XPath',     valueLabel: '',             badgeClass: 'ab-browser' },
-  browser_type:        { label: 'Browser: Type',        group: 'Browser (Playwright)', targetLabel: 'CSS Selector / XPath',     valueLabel: 'Text to Type', badgeClass: 'ab-browser' },
-  browser_navigate:    { label: 'Browser: Navigate',    group: 'Browser (Playwright)', targetLabel: 'URL',                      valueLabel: '',             badgeClass: 'ab-browser' },
-  browser_wait:        { label: 'Browser: Wait',        group: 'Browser (Playwright)', targetLabel: 'CSS Selector / XPath',     valueLabel: 'Timeout (ms)', badgeClass: 'ab-browser' },
-  browser_screenshot:  { label: 'Browser: Screenshot',  group: 'Browser (Playwright)', targetLabel: 'File Path to Save',        valueLabel: '',             badgeClass: 'ab-browser' },
-  delay:               { label: 'Delay',                group: 'Utility',              targetLabel: '',                         valueLabel: 'Duration (ms)', badgeClass: 'ab-delay' },
+  left_click:          { label: 'Left Click',           group: 'Windows GUI',          targetLabel: 'Coordinates (x,y)',              valueLabel: '',                            badgeClass: 'ab-gui',      coordPicker: true  },
+  right_click:         { label: 'Right Click',          group: 'Windows GUI',          targetLabel: 'Coordinates (x,y)',              valueLabel: '',                            badgeClass: 'ab-gui',      coordPicker: true  },
+  double_click:        { label: 'Double Click',         group: 'Windows GUI',          targetLabel: 'Coordinates (x,y)',              valueLabel: '',                            badgeClass: 'ab-gui',      coordPicker: true  },
+  keyboard_input:      { label: 'Keyboard Input',       group: 'Windows GUI',          targetLabel: 'Window Title (optional)',        valueLabel: 'Text to Type',                badgeClass: 'ab-keyboard', coordPicker: false },
+  open_app:            { label: 'Open App',             group: 'Windows GUI',          targetLabel: 'App Path / Command',            valueLabel: '',                            badgeClass: 'ab-gui',      coordPicker: false },
+  hot_key:             { label: 'Hot Key',              group: 'Windows GUI',          targetLabel: 'Key Combination (e.g. ctrl+c)', valueLabel: 'Window Title (optional)',     badgeClass: 'ab-keyboard', coordPicker: false },
+  close_app:           { label: 'Close App',            group: 'Windows GUI',          targetLabel: 'App Name or Window Title',       valueLabel: '',                            badgeClass: 'ab-gui',      coordPicker: false },
+  move_window:         { label: 'Move Window',          group: 'Windows GUI',          targetLabel: 'Coordinates (x,y)',              valueLabel: 'Window Title (optional)',     badgeClass: 'ab-gui',      coordPicker: true  },
+  browser_click:       { label: 'Browser: Click',       group: 'Browser (Playwright)', targetLabel: 'CSS Selector / XPath',          valueLabel: '',                            badgeClass: 'ab-browser',  coordPicker: false },
+  browser_type:        { label: 'Browser: Type',        group: 'Browser (Playwright)', targetLabel: 'CSS Selector / XPath',          valueLabel: 'Text to Type',                badgeClass: 'ab-browser',  coordPicker: false },
+  browser_navigate:    { label: 'Browser: Navigate',    group: 'Browser (Playwright)', targetLabel: 'URL',                           valueLabel: '',                            badgeClass: 'ab-browser',  coordPicker: false },
+  browser_wait:        { label: 'Browser: Wait',        group: 'Browser (Playwright)', targetLabel: 'CSS Selector / XPath',          valueLabel: 'Timeout (ms)',                badgeClass: 'ab-browser',  coordPicker: false },
+  browser_screenshot:  { label: 'Browser: Screenshot',  group: 'Browser (Playwright)', targetLabel: 'File Path to Save',             valueLabel: '',                            badgeClass: 'ab-browser',  coordPicker: false },
+  delay:               { label: 'Delay',                group: 'Utility',              targetLabel: '',                              valueLabel: 'Duration (ms)',               badgeClass: 'ab-delay',    coordPicker: false },
 };
 
 const ACTION_GROUPS = ['Windows GUI', 'Browser (Playwright)', 'Utility'];
@@ -562,7 +565,10 @@ function openStepModal(step) {
           </div>
           <div class="form-group" id="m-fg-target">
             <label class="form-label" id="m-label-target">Target</label>
-            <input class="input" id="m-target" value="${esc(step.target || '')}" />
+            <div class="input-with-btn">
+              <input class="input" id="m-target" value="${esc(step.target || '')}" />
+              <button class="btn btn-secondary btn-pick" id="btn-pick-coord" onclick="startCoordPick()" style="display:none" title="Move cursor to target position, then click Pick">&#x1F4CD; Pick</button>
+            </div>
             <span class="form-hint" id="m-hint"></span>
           </div>
           <div class="form-group" id="m-fg-value">
@@ -598,11 +604,13 @@ function updateModalFields() {
   const lblT = document.getElementById('m-label-target');
   const lblV = document.getElementById('m-label-value');
   const hint = document.getElementById('m-hint');
+  const pickBtn = document.getElementById('btn-pick-coord');
 
   if (fgT)  fgT.style.display  = info.targetLabel ? '' : 'none';
   if (fgV)  fgV.style.display  = info.valueLabel  ? '' : 'none';
   if (lblT) lblT.textContent = info.targetLabel;
   if (lblV) lblV.textContent = info.valueLabel;
+  if (pickBtn) pickBtn.style.display = info.coordPicker ? '' : 'none';
 
   const tEl = document.getElementById('m-target');
   if (tEl) {
@@ -610,18 +618,58 @@ function updateModalFields() {
       : action.startsWith('browser_') ? 'e.g. #submit-btn or //button[@id="ok"]'
       : action === 'open_app' ? '/usr/bin/gedit or notepad.exe'
       : action === 'browser_screenshot' ? '/home/user/screenshot.png'
-      : 'x,y (e.g. 500,300)';
+      : action === 'hot_key' ? 'e.g. ctrl+c  alt+F4  ctrl+shift+s'
+      : action === 'close_app' ? 'e.g. notepad.exe  Notepad  gedit'
+      : info.coordPicker ? 'x,y (e.g. 500,300)'
+      : '';
   }
   if (hint) {
     hint.textContent = action.startsWith('browser_') && action !== 'browser_navigate'
       ? 'Examples: #id  .class  text=Submit  //xpath'
+      : info.coordPicker
+      ? 'Type x,y manually or click Pick — move cursor to target then wait 3s'
       : '';
   }
   const vEl = document.getElementById('m-value');
   if (vEl) {
     vEl.placeholder = action === 'delay' || action === 'browser_wait' ? '1000'
       : action === 'keyboard_input' || action === 'browser_type' ? 'Text to type...'
+      : action === 'hot_key' || action === 'move_window' ? 'Window title (optional)'
       : '';
+  }
+}
+
+async function startCoordPick() {
+  const btn = document.getElementById('btn-pick-coord');
+  const inp = document.getElementById('m-target');
+  if (!btn || !inp) return;
+
+  btn.disabled = true;
+  const orig = btn.innerHTML;
+
+  for (let i = 3; i >= 1; i--) {
+    btn.innerHTML = `&#x23F3; ${i}s`;
+    await new Promise(r => setTimeout(r, 1000));
+  }
+  btn.innerHTML = '&#x1F4E1; Đang đọc...';
+
+  try {
+    const res = await fetch('/api/tools/pick-coordinate', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + S.token }
+    });
+    if (!res.ok) {
+      const d = await res.json();
+      throw new Error(d.detail || 'Không đọc được tọa độ');
+    }
+    const data = await res.json();
+    inp.value = `${data.x},${data.y}`;
+    toast(`Tọa độ: ${data.x},${data.y}`);
+  } catch (e) {
+    toast(e.message, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = orig;
   }
 }
 

@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import platform
 import subprocess
 from typing import Any
@@ -14,6 +15,20 @@ async def _shell(cmd: str) -> None:
     _, stderr = await proc.communicate()
     if proc.returncode != 0:
         raise RuntimeError(stderr.decode().strip() or f'Command failed: {cmd}')
+
+
+async def _ps(script: str) -> None:
+    """Run a multi-line PowerShell script via -EncodedCommand (Base64 UTF-16LE).
+    Avoids all shell-quoting and newline issues."""
+    encoded = base64.b64encode(script.encode('utf-16-le')).decode()
+    proc = await asyncio.create_subprocess_exec(
+        'powershell', '-NoProfile', '-NonInteractive', '-EncodedCommand', encoded,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    _, stderr = await proc.communicate()
+    if proc.returncode != 0:
+        raise RuntimeError(stderr.decode().strip() or 'PowerShell command failed')
 
 
 async def _cancellable_sleep(seconds: float, cancel: asyncio.Event) -> bool:
@@ -87,6 +102,12 @@ async def _run_step(step: dict, ws: WebSocket, ctx: dict, cancel: asyncio.Event)
         await _do_keyboard(target, value, os_name)
     elif action == 'open_app':
         await _do_open_app(target, os_name)
+    elif action == 'hot_key':
+        await _do_hotkey(target, value, os_name)
+    elif action == 'close_app':
+        await _do_close_app(target, os_name)
+    elif action == 'move_window':
+        await _do_move_window(target, value, os_name)
     elif action == 'delay':
         ms = int(value) if value.isdigit() else 1000
         await _cancellable_sleep(ms / 1000, cancel)
@@ -106,6 +127,17 @@ def _parse_xy(target: str) -> tuple[int, int]:
         raise ValueError(f'Invalid coordinates "{target}". Expected integers.')
 
 
+_MOUSE_TYPE = """
+Add-Type @"
+using System.Runtime.InteropServices;
+public class Mouse {
+    [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
+    [DllImport("user32.dll")] public static extern void mouse_event(uint f, uint x, uint y, uint d, int e);
+}
+"@
+"""
+
+
 async def _do_click(target: str, button: int, os_name: str) -> None:
     if not target:
         raise ValueError('Target (x,y coordinates) required for click action')
@@ -115,15 +147,12 @@ async def _do_click(target: str, button: int, os_name: str) -> None:
         await _shell(f'xdotool mousemove {x} {y} click {button}')
     elif os_name == 'windows':
         flag_down, flag_up = (2, 4) if button == 1 else (8, 16)
-        ps = (
-            f'Add-Type @"\\nusing System.Runtime.InteropServices;\\n'
-            f'public class M {{\\n'
-            f'  [DllImport(\\"user32.dll\\")] public static extern bool SetCursorPos(int x,int y);\\n'
-            f'  [DllImport(\\"user32.dll\\")] public static extern void mouse_event(uint f,uint x,uint y,uint d,int e);\\n'
-            f'}}\\n"@\\n'
-            f'[M]::SetCursorPos({x},{y});[M]::mouse_event({flag_down},0,0,0,0);[M]::mouse_event({flag_up},0,0,0,0)'
-        )
-        await _shell(f'powershell -NoProfile -Command "{ps}"')
+        await _ps(f"""
+{_MOUSE_TYPE}
+[Mouse]::SetCursorPos({x}, {y})
+[Mouse]::mouse_event({flag_down}, 0, 0, 0, 0)
+[Mouse]::mouse_event({flag_up}, 0, 0, 0, 0)
+""")
     else:
         raise RuntimeError(f'Click automation not supported on {os_name}')
 
@@ -147,19 +176,29 @@ async def _do_keyboard(window_title: str, text: str, os_name: str) -> None:
         if window_title:
             await _shell(f'xdotool search --name "{window_title}" windowfocus --sync')
             await asyncio.sleep(0.15)
-        safe = text.replace("'", "'\\''")
-        await _shell(f"xdotool type --delay 30 '{safe}'")
+        # Use exec (not shell) so text is passed as a raw arg — no shell escaping issues
+        proc = await asyncio.create_subprocess_exec(
+            'xdotool', 'type', '--clearmodifiers', '--delay', '30', '--', text,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _, stderr = await proc.communicate()
+        if proc.returncode != 0:
+            raise RuntimeError(stderr.decode().strip() or 'xdotool type failed')
     elif os_name == 'windows':
-        if window_title:
-            ps_focus = (
-                f'Add-Type -AssemblyName Microsoft.VisualBasic; '
-                f'[Microsoft.VisualBasic.Interaction]::AppActivate("{window_title}")'
-            )
-            await _shell(f'powershell -NoProfile -Command "{ps_focus}"')
-            await asyncio.sleep(0.15)
-        safe = text.replace("'", "''")
-        ps = f"Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.SendKeys]::SendWait('{safe}')"
-        await _shell(f'powershell -NoProfile -Command "{ps}"')
+        focus = (
+            f'Add-Type -AssemblyName Microsoft.VisualBasic\n'
+            f'[Microsoft.VisualBasic.Interaction]::AppActivate("{window_title}")\n'
+            f'Start-Sleep -Milliseconds 150\n'
+        ) if window_title else ''
+        # Clipboard+paste handles ALL characters. Text is embedded via -EncodedCommand
+        # so no here-string quoting issues even if text contains '@ or other edge cases.
+        escaped = text.replace('`', '``').replace('"', '`"').replace('$', '`$')
+        await _ps(f"""\
+{focus}Add-Type -AssemblyName System.Windows.Forms
+[System.Windows.Forms.Clipboard]::SetText("{escaped}")
+[System.Windows.Forms.SendKeys]::SendWait("^v")
+""")
     else:
         raise RuntimeError(f'Keyboard input not supported on {os_name}')
 
@@ -167,13 +206,34 @@ async def _do_keyboard(window_title: str, text: str, os_name: str) -> None:
 async def _do_open_app(target: str, os_name: str) -> None:
     if not target:
         raise ValueError('Target (app path/command) required for open_app')
-    if os_name == 'linux':
-        subprocess.Popen(target, shell=True)
-    elif os_name == 'windows':
-        subprocess.Popen(f'start "" "{target}"', shell=True)
-    else:
-        subprocess.Popen(f'open "{target}"', shell=True)
-    await asyncio.sleep(0.5)
+    try:
+        if os_name == 'windows':
+            # os.startfile is the standard Windows launcher — handles exe, paths with spaces,
+            # file associations, shortcuts, app names in PATH, all without shell quoting issues
+            import os as _os
+            _os.startfile(target)
+        elif os_name == 'darwin':
+            proc = await asyncio.create_subprocess_exec(
+                'open', target,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            _, err = await proc.communicate()
+            if proc.returncode != 0:
+                raise RuntimeError(err.decode().strip() or f'Cannot open: {target}')
+        else:  # linux
+            # start_new_session=True detaches the child so it outlives the server process
+            await asyncio.create_subprocess_shell(
+                target,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+                start_new_session=True,
+            )
+    except FileNotFoundError:
+        raise RuntimeError(f'App not found: "{target}". Check the path or app name.')
+    except OSError as e:
+        raise RuntimeError(f'Failed to open "{target}": {e}')
+    await asyncio.sleep(0.8)
 
 
 async def _do_browser(action: str, target: str, value: str, ws: WebSocket, ctx: dict) -> None:
@@ -208,3 +268,138 @@ async def _do_browser(action: str, target: str, value: str, ws: WebSocket, ctx: 
         path = target or 'screenshot.png'
         await page.screenshot(path=path, full_page=True)
         await ws.send_json({'type': 'log', 'message': f'  Screenshot saved: {path}'})
+
+
+# ── New Windows GUI actions ───────────────────────────────────────────────────
+
+def _hotkey_to_sendkeys(keys: str) -> str:
+    """Convert 'ctrl+shift+s' → '^+s' for Windows SendKeys."""
+    modifier_map = {'ctrl': '^', 'control': '^', 'alt': '%', 'shift': '+'}
+    special_map = {
+        'f1': '{F1}', 'f2': '{F2}', 'f3': '{F3}', 'f4': '{F4}',
+        'f5': '{F5}', 'f6': '{F6}', 'f7': '{F7}', 'f8': '{F8}',
+        'f9': '{F9}', 'f10': '{F10}', 'f11': '{F11}', 'f12': '{F12}',
+        'enter': '{ENTER}', 'return': '{ENTER}', 'esc': '{ESC}',
+        'escape': '{ESC}', 'tab': '{TAB}', 'delete': '{DELETE}',
+        'del': '{DELETE}', 'backspace': '{BACKSPACE}',
+        'home': '{HOME}', 'end': '{END}', 'space': ' ',
+        'up': '{UP}', 'down': '{DOWN}', 'left': '{LEFT}', 'right': '{RIGHT}',
+        'pgup': '{PGUP}', 'pageup': '{PGUP}', 'pgdn': '{PGDN}', 'pagedown': '{PGDN}',
+    }
+    parts = [p.strip().lower() for p in keys.split('+')]
+    modifiers = ''.join(modifier_map.get(p, '') for p in parts[:-1])
+    key = special_map.get(parts[-1], parts[-1])
+    return modifiers + key
+
+
+async def _do_hotkey(keys: str, window_title: str, os_name: str) -> None:
+    if not keys:
+        raise ValueError('Target (key combination, e.g. ctrl+c) required for hot_key')
+    if os_name == 'linux':
+        if window_title:
+            await _shell(f'xdotool search --name "{window_title}" windowfocus --sync')
+            await asyncio.sleep(0.15)
+        await _shell(f'xdotool key {keys}')
+    elif os_name == 'windows':
+        focus = (
+            f'Add-Type -AssemblyName Microsoft.VisualBasic\n'
+            f'[Microsoft.VisualBasic.Interaction]::AppActivate("{window_title}")\n'
+            f'Start-Sleep -Milliseconds 150\n'
+        ) if window_title else ''
+        mapped = _hotkey_to_sendkeys(keys)
+        await _ps(f"""\
+{focus}Add-Type -AssemblyName System.Windows.Forms
+[System.Windows.Forms.SendKeys]::SendWait("{mapped}")
+""")
+    else:
+        raise RuntimeError(f'Hot key not supported on {os_name}')
+
+
+async def _do_close_app(target: str, os_name: str) -> None:
+    if not target:
+        raise ValueError('Target (app name or window title) required for close_app')
+    if os_name == 'linux':
+        result = await asyncio.create_subprocess_shell(
+            f'xdotool search --name "{target}" windowclose',
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+        )
+        await result.communicate()
+        if result.returncode != 0:
+            await _shell(f'pkill -f "{target}" || true')
+    elif os_name == 'windows':
+        await _ps(f"""\
+Get-Process | Where-Object {{
+    $_.MainWindowTitle -like "*{target}*" -or $_.Name -like "*{target}*"
+}} | Stop-Process -Force -ErrorAction SilentlyContinue
+""")
+    else:
+        raise RuntimeError(f'close_app not supported on {os_name}')
+
+
+async def _do_move_window(target: str, window_title: str, os_name: str) -> None:
+    if not target:
+        raise ValueError('Target (x,y coordinates) required for move_window')
+    x, y = _parse_xy(target)
+    if os_name == 'linux':
+        if window_title:
+            await _shell(f'xdotool search --name "{window_title}" windowfocus --sync')
+            await asyncio.sleep(0.1)
+        await _shell(f'xdotool getactivewindow windowmove {x} {y}')
+    elif os_name == 'windows':
+        focus = (
+            f'Add-Type -AssemblyName Microsoft.VisualBasic\n'
+            f'[Microsoft.VisualBasic.Interaction]::AppActivate("{window_title}")\n'
+            f'Start-Sleep -Milliseconds 100\n'
+        ) if window_title else ''
+        await _ps(f"""\
+{focus}Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public class WM {{
+    [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
+    [DllImport("user32.dll")] public static extern bool MoveWindow(IntPtr h, int x, int y, int w, int h2, bool repaint);
+    public struct RECT {{ public int L, T, R, B; }}
+}}
+"@
+$hwnd = [WM]::GetForegroundWindow()
+$rect = New-Object WM+RECT
+[WM]::GetWindowRect($hwnd, [ref]$rect) | Out-Null
+[WM]::MoveWindow($hwnd, {x}, {y}, $rect.R - $rect.L, $rect.B - $rect.T, $true) | Out-Null
+""")
+    else:
+        raise RuntimeError(f'move_window not supported on {os_name}')
+
+
+async def get_cursor_position() -> tuple[int, int]:
+    """Read current cursor position from the OS."""
+    import re
+    os_name = platform.system().lower()
+    if os_name == 'linux':
+        proc = await asyncio.create_subprocess_shell(
+            'xdotool getmouselocation',
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+        )
+        stdout, _ = await proc.communicate()
+        if proc.returncode != 0:
+            raise RuntimeError('xdotool not available. Install: sudo apt install xdotool')
+        m = re.search(r'x:(\d+) y:(\d+)', stdout.decode())
+        if not m:
+            raise RuntimeError('Cannot parse cursor position from xdotool output')
+        return int(m.group(1)), int(m.group(2))
+    elif os_name == 'windows':
+        ps = (
+            'Add-Type -AssemblyName System.Windows.Forms\n'
+            '$p = [System.Windows.Forms.Cursor]::Position\n'
+            'Write-Output "$($p.X),$($p.Y)"\n'
+        )
+        encoded = base64.b64encode(ps.encode('utf-16-le')).decode()
+        proc = await asyncio.create_subprocess_exec(
+            'powershell', '-NoProfile', '-NonInteractive', '-EncodedCommand', encoded,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await proc.communicate()
+        parts = stdout.decode().strip().split(',')
+        return int(parts[0]), int(parts[1])
+    else:
+        raise RuntimeError(f'Coordinate picking not supported on {os_name}')

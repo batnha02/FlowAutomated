@@ -1,12 +1,12 @@
 import asyncio
 from pathlib import Path
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query, Depends, HTTPException
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.db import init_db
-from app.auth import decode_token
-from app.executor import execute_workflow
+from app.auth import decode_token, get_current_user
+from app.executor import execute_workflow, get_cursor_position
 from app.routes.auth import router as auth_router
 from app.routes.users import router as users_router
 from app.routes.workflows import router as workflows_router
@@ -30,6 +30,16 @@ app.include_router(workflows_router, prefix='/api/workflows')
 @app.get('/health')
 def health():
     return {'ok': True}
+
+
+@app.post('/api/tools/pick-coordinate')
+async def pick_coordinate(user: dict = Depends(get_current_user)):
+    """Return current cursor position on the server OS."""
+    try:
+        x, y = await get_cursor_position()
+        return {'x': x, 'y': y}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ── Static files ──────────────────────────────────────────────────────────────
