@@ -46,6 +46,38 @@ const S = {
 
 function uuid() { return crypto.randomUUID(); }
 
+/**
+ * Nếu user paste raw HTML element (copy từ F12 DevTools),
+ * trả về CSS selector phù hợp nhất. Trả về null nếu không phải HTML.
+ */
+function htmlToSelector(raw) {
+  const t = raw.trim();
+  if (!t.startsWith('<')) return null;
+
+  const tagM = t.match(/^<(\w+)/);
+  const tag = tagM ? tagM[1].toLowerCase() : '';
+
+  // id → #id (chính xác nhất)
+  const idM = t.match(/\bid=["']([^"']+)['"]/);
+  if (idM) return `#${idM[1]}`;
+
+  // class → tag.class1.class2
+  const clsM = t.match(/\bclass=["']([^"']+)['"]/);
+  if (clsM) {
+    const classes = clsM[1].trim().split(/\s+/).join('.');
+    return tag ? `${tag}.${classes}` : `.${classes}`;
+  }
+
+  // text content → text=Sign In
+  const textM = t.match(/>([^<]+)</);
+  if (textM) {
+    const text = textM[1].trim();
+    if (text) return `text=${text}`;
+  }
+
+  return null;
+}
+
 function esc(s) {
   return String(s ?? '')
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -612,20 +644,42 @@ function updateModalFields() {
   if (lblV) lblV.textContent = info.valueLabel;
   if (pickBtn) pickBtn.style.display = info.coordPicker ? '' : 'none';
 
+  const isBrowserSelector = ['browser_click', 'browser_type', 'browser_wait'].includes(action);
+
   const tEl = document.getElementById('m-target');
   if (tEl) {
     tEl.placeholder = action === 'browser_navigate' ? 'https://example.com'
-      : action.startsWith('browser_') ? 'e.g. #submit-btn or //button[@id="ok"]'
+      : isBrowserSelector ? 'Paste HTML element hoặc nhập #id / .class / text=...'
       : action === 'open_app' ? '/usr/bin/gedit or notepad.exe'
       : action === 'browser_screenshot' ? '/home/user/screenshot.png'
       : action === 'hot_key' ? 'e.g. ctrl+c  alt+F4  ctrl+shift+s'
       : action === 'close_app' ? 'e.g. notepad.exe  Notepad  gedit'
       : info.coordPicker ? 'x,y (e.g. 500,300)'
       : '';
+
+    // Paste handler: tự convert HTML element → CSS selector
+    tEl.onpaste = isBrowserSelector ? function (e) {
+      const text = (e.clipboardData || window.clipboardData).getData('text');
+      const sel = htmlToSelector(text);
+      if (!sel) return; // không phải HTML, cho paste bình thường
+      e.preventDefault();
+      tEl.value = sel;
+      if (hint) {
+        hint.style.color = '#2563eb';
+        hint.textContent = `✓ Extracted: ${sel}`;
+        setTimeout(() => {
+          hint.style.color = '';
+          hint.textContent = '💡 Dán HTML element (F12 → Copy element) để tự extract selector';
+        }, 3000);
+      }
+    } : null;
   }
+
   if (hint) {
-    hint.textContent = action.startsWith('browser_') && action !== 'browser_navigate'
-      ? 'Examples: #id  .class  text=Submit  //xpath'
+    hint.textContent = isBrowserSelector
+      ? '💡 Dán HTML element (F12 → Copy element) để tự extract selector'
+      : action === 'browser_navigate' || action === 'browser_screenshot'
+      ? ''
       : info.coordPicker
       ? 'Type x,y manually or click Pick — move cursor to target then wait 3s'
       : '';

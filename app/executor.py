@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import platform
+import re
 import subprocess
 from typing import Any
 from fastapi import WebSocket
@@ -236,6 +237,41 @@ async def _do_open_app(target: str, os_name: str) -> None:
     await asyncio.sleep(0.8)
 
 
+def _resolve_selector(target: str) -> tuple[str, str | None]:
+    """Return (selector, warning_msg).
+    If target is a raw HTML snippet, derive a CSS selector from it;
+    otherwise return it unchanged."""
+    t = target.strip()
+    if not t.startswith('<'):
+        return t, None
+
+    tag_m = re.match(r'<(\w+)', t)
+    tag = tag_m.group(1).lower() if tag_m else ''
+
+    # id has highest specificity
+    id_m = re.search(r'\bid=["\']([^"\']+)["\']', t)
+    if id_m:
+        sel = f'#{id_m.group(1)}'
+        return sel, f'HTML detected — using selector: {sel}'
+
+    # class list
+    cls_m = re.search(r'\bclass=["\']([^"\']+)["\']', t)
+    if cls_m:
+        classes = '.'.join(cls_m.group(1).split())
+        sel = f'{tag}.{classes}' if tag else f'.{classes}'
+        return sel, f'HTML detected — using selector: {sel}'
+
+    # inner text fallback
+    text_m = re.search(r'>([^<]+)</', t)
+    if text_m:
+        text = text_m.group(1).strip()
+        if text:
+            sel = f'text={text}'
+            return sel, f'HTML detected — using selector: {sel}'
+
+    return t, 'HTML detected but could not derive a selector — passing as-is'
+
+
 async def _do_browser(action: str, target: str, value: str, ws: WebSocket, ctx: dict) -> None:
     if 'playwright' not in ctx:
         try:
@@ -263,12 +299,21 @@ async def _do_browser(action: str, target: str, value: str, ws: WebSocket, ctx: 
         await page.goto(target)
         await ws.send_json({'type': 'log', 'message': f'  Navigated to {target}'})
     elif action == 'browser_click':
-        await page.click(target)
+        sel, warn = _resolve_selector(target)
+        if warn:
+            await ws.send_json({'type': 'log', 'message': f'  ⚠ {warn}'})
+        await page.click(sel)
     elif action == 'browser_type':
-        await page.fill(target, value)
+        sel, warn = _resolve_selector(target)
+        if warn:
+            await ws.send_json({'type': 'log', 'message': f'  ⚠ {warn}'})
+        await page.fill(sel, value)
     elif action == 'browser_wait':
+        sel, warn = _resolve_selector(target)
+        if warn:
+            await ws.send_json({'type': 'log', 'message': f'  ⚠ {warn}'})
         timeout = int(value) if value.isdigit() else 5000
-        await page.wait_for_selector(target, timeout=timeout)
+        await page.wait_for_selector(sel, timeout=timeout)
     elif action == 'browser_screenshot':
         path = target or 'screenshot.png'
         await page.screenshot(path=path, full_page=True)
