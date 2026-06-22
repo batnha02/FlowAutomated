@@ -5,3 +5,7 @@ dist/
 *.db-wal
 .env
 .env.local
+venv/
+__pycache__/
+*.pyc
+*.pyo

@@ -1,27 +1,25 @@
 #!/bin/bash
-# AutoStep - Start script
-# Usage: ./start.sh [dev|prod]
+# AutoStep — Python edition
+# Usage: ./start.sh [--port 8000]
 
-MODE=${1:-dev}
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PORT="${2:-8000}"
 
-if [ "$MODE" = "prod" ]; then
-  echo "Building frontend..."
-  cd "$ROOT/frontend" && npm run build
-  echo "Starting backend (serves frontend on :3001)..."
-  cd "$ROOT/backend" && npx tsx src/index.ts
-else
-  echo "Starting AutoStep in development mode..."
-  echo "  Backend:  http://localhost:3001"
-  echo "  Frontend: http://localhost:5173"
-  echo ""
-  # Start backend
-  cd "$ROOT/backend" && npx tsx src/index.ts &
-  BACKEND_PID=$!
-  # Start frontend
-  cd "$ROOT/frontend" && npm run dev &
-  FRONTEND_PID=$!
-  echo "Press Ctrl+C to stop both servers"
-  trap "kill $BACKEND_PID $FRONTEND_PID 2>/dev/null; exit" INT TERM
-  wait
+cd "$ROOT"
+
+# Create venv if needed
+if [ ! -d "venv" ]; then
+  echo "Creating virtual environment..."
+  python3 -m venv venv
 fi
+
+# Install / update packages
+echo "Checking dependencies..."
+venv/bin/pip install -q -r requirements.txt
+
+echo ""
+echo "  AutoStep running on http://localhost:${PORT}"
+echo "  Default login: admin / 123456"
+echo ""
+
+venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port "$PORT" --reload
