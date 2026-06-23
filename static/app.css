@@ -51,6 +51,7 @@ a { text-decoration: none; color: inherit; }
 .input-with-btn { display: flex; gap: 6px; align-items: stretch; }
 .input-with-btn .input { flex: 1; min-width: 0; }
 .btn-pick { white-space: nowrap; padding: 8px 12px; font-size: 13px; }
+.btn-mask { white-space: nowrap; padding: 8px 10px; font-size: 14px; min-width: 36px; }
 .form-label { font-size: 13px; font-weight: 500; color: #374151; }
 .form-hint { font-size: 11px; color: #9ca3af; margin-top: 2px; }
 select.input { cursor: pointer; }

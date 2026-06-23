@@ -15,6 +15,7 @@ class Step(BaseModel):
     actionType: ActionType
     target: Optional[str] = None
     value: Optional[str] = None
+    masked: Optional[bool] = None
     delay: Optional[int] = None
     description: Optional[str] = None
 

@@ -43,6 +43,7 @@ const S = {
   // Local agent execution mode
   localMode: localStorage.getItem('localMode') === '1',
   agentPort: parseInt(localStorage.getItem('agentPort') || '8001', 10),
+  _stepMasked: false,
 };
 
 /* ═══════════════════════════ UTILITIES ═══════════════════════════════════════ */
@@ -450,7 +451,7 @@ function stepCardHtml(step, i) {
           ${step.delay ? `<span class="step-delay">+${step.delay}ms</span>` : ''}
         </div>
         ${step.target ? `<div class="step-target">→ ${esc(step.target)}</div>` : ''}
-        ${step.value  ? `<div class="step-target">✎ ${esc(step.value)}</div>`  : ''}
+        ${step.value  ? `<div class="step-target">✎ ${step.masked ? '••••••••' : esc(step.value)}</div>`  : ''}
         ${es.error    ? `<div class="step-error">${esc(es.error)}</div>`        : ''}
       </div>
       ${S.wfOwner && !S.running ? `
@@ -626,6 +627,7 @@ function toggleLog(show) {
 /* ═══════════════════════════ STEP MODAL ══════════════════════════════════════ */
 
 function openStepModal(step) {
+  S._stepMasked = !!step.masked;
   const root = document.getElementById('modal-root');
   const groups = ACTION_GROUPS.map(g => {
     const opts = Object.entries(ACTION_TYPES)
@@ -661,7 +663,15 @@ function openStepModal(step) {
           </div>
           <div class="form-group" id="m-fg-value">
             <label class="form-label" id="m-label-value">Value</label>
-            <input class="input" id="m-value" value="${esc(step.value || '')}" />
+            <div class="input-with-btn">
+              <input class="input" id="m-value" value="${esc(step.value || '')}"
+                     type="${step.masked ? 'password' : 'text'}" />
+              <button class="btn btn-secondary btn-mask" id="btn-mask-toggle"
+                      onclick="toggleValueMask()" style="display:none"
+                      title="${step.masked ? 'Hiện nội dung (chỉ owner)' : 'Ẩn nội dung (dành cho password)'}">
+                ${step.masked ? '🔒' : '👁'}
+              </button>
+            </div>
           </div>
           <div class="form-group">
             <label class="form-label">Delay after step (ms)</label>
@@ -747,6 +757,18 @@ function updateModalFields() {
       : action === 'hot_key' || action === 'move_window' ? 'Window title (optional)'
       : '';
   }
+
+  const isTextToType = action === 'keyboard_input' || action === 'browser_type';
+  const maskBtn = document.getElementById('btn-mask-toggle');
+  if (maskBtn) {
+    maskBtn.style.display = isTextToType ? '' : 'none';
+    if (!isTextToType && S._stepMasked) {
+      S._stepMasked = false;
+      if (vEl) vEl.type = 'text';
+    }
+    maskBtn.textContent = S._stepMasked ? '🔒' : '👁';
+    maskBtn.title = S._stepMasked ? 'Hiện nội dung (chỉ owner)' : 'Ẩn nội dung (dành cho password)';
+  }
 }
 
 async function startCoordPick() {
@@ -783,6 +805,21 @@ async function startCoordPick() {
   }
 }
 
+function toggleValueMask() {
+  const inp = document.getElementById('m-value');
+  const btn = document.getElementById('btn-mask-toggle');
+  if (!inp || !btn) return;
+  // If currently masked and user is NOT owner, block reveal
+  if (S._stepMasked && !S.wfOwner) {
+    toast('Chỉ owner của workflow mới có thể xem nội dung ẩn', 'error');
+    return;
+  }
+  S._stepMasked = !S._stepMasked;
+  inp.type = S._stepMasked ? 'password' : 'text';
+  btn.textContent = S._stepMasked ? '🔒' : '👁';
+  btn.title = S._stepMasked ? 'Hiện nội dung (chỉ owner)' : 'Ẩn nội dung (dành cho password)';
+}
+
 function closeModal(e) {
   if (e && e.target !== e.currentTarget) return;
   document.getElementById('modal-root').innerHTML = '';
@@ -797,6 +834,7 @@ function submitStep(stepId) {
     actionType: document.getElementById('m-action').value,
     target: document.getElementById('m-target')?.value.trim() || undefined,
     value:  document.getElementById('m-value')?.value.trim()  || undefined,
+    masked: S._stepMasked || undefined,
     delay:  parseInt(document.getElementById('m-delay').value) || 0,
     description: document.getElementById('m-desc').value.trim() || undefined,
   };
