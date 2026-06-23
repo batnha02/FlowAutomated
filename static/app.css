@@ -24,6 +24,8 @@ a { text-decoration: none; color: inherit; }
 .sidebar-footer { padding: 12px 10px; border-top: 1px solid #1f2937; }
 .btn-logout { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 8px; background: none; border: none; color: #6b7280; font-size: 13px; font-weight: 500; width: 100%; cursor: pointer; transition: all 0.15s; }
 .btn-logout:hover { background: #1f2937; color: #fff; }
+.btn-change-pass { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 8px; background: none; border: none; color: #6b7280; font-size: 13px; font-weight: 500; width: 100%; cursor: pointer; transition: all 0.15s; }
+.btn-change-pass:hover { background: #1f2937; color: #fff; }
 
 /* ── Buttons ───────────────────────────────────────────────────────────────── */
 .btn { display: inline-flex; align-items: center; justify-content: center; gap: 5px; padding: 6px 12px; border-radius: 7px; font-size: 13px; font-weight: 500; border: none; cursor: pointer; transition: all 0.15s; white-space: nowrap; }

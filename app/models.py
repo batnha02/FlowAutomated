@@ -46,3 +46,12 @@ class CreateUserRequest(BaseModel):
 
 class UpdateUserRequest(BaseModel):
     isAdmin: bool
+
+
+class ChangePasswordRequest(BaseModel):
+    currentPassword: str
+    newPassword: str
+
+
+class AdminChangePasswordRequest(BaseModel):
+    newPassword: str

@@ -165,6 +165,7 @@ function renderLayout(innerHtml) {
           ${S.user?.isAdmin ? `<button class="nav-link ${hash === '/admin' ? 'active' : ''}" onclick="navigate('/admin')">🛡 Users</button>` : ''}
         </div>
         <div class="sidebar-footer">
+          <button class="btn-change-pass" onclick="openChangePassword()">🔑 Change Password</button>
           <button class="btn-logout" onclick="doLogout()">🚪 Logout</button>
         </div>
       </nav>
@@ -947,13 +948,17 @@ function renderUserTable(users) {
             <td><span class="badge-role ${u.is_admin ? 'admin' : 'user'}">${u.is_admin ? '⚡ Admin' : 'User'}</span></td>
             <td style="color:#9ca3af;font-size:12px">${fmtDate(u.created_at)}</td>
             <td>
-              ${u.id !== S.user.id ? `<div class="table-actions">
+              <div class="table-actions">
+                <button class="btn btn-ghost btn-sm" title="Change password"
+                  onclick="openAdminChangePassword(${u.id},'${esc(u.username)}')">🔑</button>
+                ${u.id !== S.user.id ? `
                 <button class="btn btn-ghost btn-sm" title="${u.is_admin ? 'Remove admin' : 'Make admin'}"
                   onclick="toggleAdmin(${u.id},${u.is_admin})" style="color:${u.is_admin ? '#f97316' : '#2563eb'}">
                   ${u.is_admin ? '🔓' : '🛡'}
                 </button>
                 <button class="btn btn-danger btn-sm" title="Delete" onclick="deleteUser(${u.id},'${esc(u.username)}')">✕</button>
-              </div>` : ''}
+                ` : ''}
+              </div>
             </td>
           </tr>`).join('')}
       </tbody>
@@ -1019,5 +1024,94 @@ async function toggleAdmin(id, currentAdmin) {
     await api('PATCH', `/users/${id}`, { isAdmin: !currentAdmin });
     toast(currentAdmin ? 'Admin removed' : 'Admin granted');
     await loadUsers();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+// ── Change own password ───────────────────────────────────────────────────────
+
+function openChangePassword() {
+  document.getElementById('modal-root').innerHTML = `
+    <div class="modal-overlay" onclick="closeModal(event)">
+      <div class="modal" style="max-width:360px" onclick="event.stopPropagation()">
+        <div class="modal-header">
+          <span class="modal-title">🔑 Change Password</span>
+          <button class="btn-close-modal" onclick="closeModal()">✕</button>
+        </div>
+        <div class="modal-body">
+          <div class="form-group">
+            <label class="form-label">Current Password *</label>
+            <input class="input" type="password" id="cp-current" placeholder="Enter current password" autocomplete="current-password" />
+          </div>
+          <div class="form-group">
+            <label class="form-label">New Password *</label>
+            <input class="input" type="password" id="cp-new" placeholder="Min. 6 characters" autocomplete="new-password" />
+          </div>
+          <div class="form-group">
+            <label class="form-label">Confirm New Password *</label>
+            <input class="input" type="password" id="cp-confirm" placeholder="Repeat new password" autocomplete="new-password" />
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+          <button class="btn btn-primary" onclick="doChangePassword()">Update Password</button>
+        </div>
+      </div>
+    </div>`;
+  document.getElementById('cp-current').focus();
+}
+
+async function doChangePassword() {
+  const currentPassword = document.getElementById('cp-current')?.value;
+  const newPassword     = document.getElementById('cp-new')?.value;
+  const confirm         = document.getElementById('cp-confirm')?.value;
+  if (!currentPassword || !newPassword) { toast('All fields are required', 'error'); return; }
+  if (newPassword.length < 6) { toast('New password must be at least 6 characters', 'error'); return; }
+  if (newPassword !== confirm) { toast('Passwords do not match', 'error'); return; }
+  try {
+    await api('PUT', '/auth/password', { currentPassword, newPassword });
+    closeModal();
+    toast('Password updated successfully');
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+// ── Admin change any user's password ─────────────────────────────────────────
+
+function openAdminChangePassword(userId, username) {
+  document.getElementById('modal-root').innerHTML = `
+    <div class="modal-overlay" onclick="closeModal(event)">
+      <div class="modal" style="max-width:360px" onclick="event.stopPropagation()">
+        <div class="modal-header">
+          <span class="modal-title">🔑 Reset Password — ${esc(username)}</span>
+          <button class="btn-close-modal" onclick="closeModal()">✕</button>
+        </div>
+        <div class="modal-body">
+          <div class="form-group">
+            <label class="form-label">New Password *</label>
+            <input class="input" type="password" id="acp-new" placeholder="Min. 6 characters" autocomplete="new-password" />
+          </div>
+          <div class="form-group">
+            <label class="form-label">Confirm New Password *</label>
+            <input class="input" type="password" id="acp-confirm" placeholder="Repeat new password" autocomplete="new-password" />
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+          <button class="btn btn-primary" onclick="doAdminChangePassword(${userId},'${esc(username)}')">Reset Password</button>
+        </div>
+      </div>
+    </div>`;
+  document.getElementById('acp-new').focus();
+}
+
+async function doAdminChangePassword(userId, username) {
+  const newPassword = document.getElementById('acp-new')?.value;
+  const confirm     = document.getElementById('acp-confirm')?.value;
+  if (!newPassword) { toast('Password is required', 'error'); return; }
+  if (newPassword.length < 6) { toast('Password must be at least 6 characters', 'error'); return; }
+  if (newPassword !== confirm) { toast('Passwords do not match', 'error'); return; }
+  try {
+    await api('PUT', `/users/${userId}/password`, { newPassword });
+    closeModal();
+    toast(`Password for "${username}" updated`);
   } catch (e) { toast(e.message, 'error'); }
 }

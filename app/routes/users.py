@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException, Depends
 from app.db import get_conn
 from app.auth import hash_password, get_current_user, require_admin
-from app.models import CreateUserRequest, UpdateUserRequest
+from app.models import CreateUserRequest, UpdateUserRequest, AdminChangePasswordRequest
 
 router = APIRouter()
 
@@ -43,6 +43,22 @@ def update_user(user_id: int, body: UpdateUserRequest, admin: dict = Depends(req
         raise HTTPException(status_code=400, detail='Cannot modify your own admin status')
     conn = get_conn()
     conn.execute('UPDATE users SET is_admin = ? WHERE id = ?', (1 if body.isAdmin else 0, user_id))
+    conn.commit()
+    conn.close()
+    return {'success': True}
+
+
+@router.put('/{user_id}/password')
+def admin_change_password(user_id: int, body: AdminChangePasswordRequest, admin: dict = Depends(require_admin)):
+    if len(body.newPassword) < 6:
+        raise HTTPException(status_code=400, detail='Password must be at least 6 characters')
+    conn = get_conn()
+    exists = conn.execute('SELECT id FROM users WHERE id = ?', (user_id,)).fetchone()
+    if not exists:
+        conn.close()
+        raise HTTPException(status_code=404, detail='User not found')
+    conn.execute('UPDATE users SET password_hash = ? WHERE id = ?',
+                 (hash_password(body.newPassword), user_id))
     conn.commit()
     conn.close()
     return {'success': True}
