@@ -261,8 +261,8 @@ function switchTab(tab) {
 }
 
 function renderWfList() {
-  const mine = S._allWorkflows.filter(w => w.ownerId === S.user.id);
-  const comm = S._allWorkflows.filter(w => w.ownerId !== S.user.id && w.isPublic);
+  const mine = S._allWorkflows.filter(w => Number(w.ownerId) === Number(S.user?.id));
+  const comm = S._allWorkflows.filter(w => Number(w.ownerId) !== Number(S.user?.id) && w.isPublic);
   const list = (S.dashTab === 'mine' ? mine : comm)
     .filter(w => !S.dashSearch || w.name.toLowerCase().includes(S.dashSearch.toLowerCase()));
 
@@ -285,7 +285,7 @@ function renderWfList() {
 }
 
 function wfCard(wf) {
-  const isOwner = wf.ownerId === S.user.id;
+  const isOwner = Number(wf.ownerId) === Number(S.user?.id);
   return `
     <div class="wf-card">
       <div class="wf-card-head">
@@ -334,6 +334,7 @@ function renderEditor(id) {
         <div style="display:flex;gap:6px;margin-left:auto">
           <button class="btn btn-secondary btn-sm" onclick="openFromFile()">📂 Open</button>
           <button class="btn btn-secondary btn-sm" onclick="saveToFile()">💾 Export</button>
+          <span id="readonly-badge" class="badge-readonly" style="display:none">👁 Read Only</span>
           <button class="btn btn-primary btn-sm" id="btn-save" onclick="showSaveDialog()">☁ Save</button>
           <label class="local-toggle" id="local-toggle-wrap" title="Thực thi trên máy PC này (cần chạy agent.py)">
             <input type="checkbox" id="chk-local" onchange="setLocalMode(this.checked)" ${S.localMode ? 'checked' : ''} />
@@ -386,7 +387,7 @@ async function loadEditorWorkflow(id) {
     const wf = await api('GET', `/workflows/${id}`);
     if (!wf) return;
     S.wf = { name: wf.name, description: wf.description, steps: wf.steps };
-    S.wfOwner = wf.ownerId === S.user.id || S.user.isAdmin;
+    S.wfOwner = Number(wf.ownerId) === Number(S.user?.id) || !!S.user?.isAdmin;
     syncEditorUI();
 
     if (location.search.includes('run=1')) {
@@ -408,10 +409,12 @@ function syncEditorUI() {
   const isOwner = S.wfOwner;
   if (nameEl) nameEl.disabled = !isOwner;
   if (descEl) descEl.disabled = !isOwner;
-  const btnSave = document.getElementById('btn-save');
-  const btnAdd  = document.getElementById('btn-add');
+  const btnSave   = document.getElementById('btn-save');
+  const btnAdd    = document.getElementById('btn-add');
+  const roLabel   = document.getElementById('readonly-badge');
   if (btnSave) btnSave.style.display = isOwner ? '' : 'none';
   if (btnAdd)  btnAdd.style.display  = isOwner ? '' : 'none';
+  if (roLabel) roLabel.style.display = isOwner ? 'none' : '';
 
   renderSteps();
 }
