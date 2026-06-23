@@ -198,6 +198,25 @@ tr:hover td { background: #f9fafb; }
 .search-wrap input { padding-left: 30px; }
 .search-icon { position: absolute; left: 9px; top: 50%; transform: translateY(-50%); color: #9ca3af; font-size: 14px; pointer-events: none; }
 
+/* ── Local agent toggle ──────────────────────────────────────────────────────── */
+.local-toggle {
+  display: flex; align-items: center; gap: 5px;
+  cursor: pointer; user-select: none;
+  font-size: 12px; color: #6b7280; white-space: nowrap;
+  padding: 4px 8px; border-radius: 6px; border: 1px solid #e5e7eb;
+  background: #f9fafb; transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.local-toggle:hover { background: #f3f4f6; }
+.local-toggle input { cursor: pointer; accent-color: #3b82f6; }
+.local-toggle:has(input:checked) { color: #1d4ed8; background: #eff6ff; border-color: #bfdbfe; }
+.agent-dot {
+  width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; display: none;
+}
+.agent-dot.online   { display: block; background: #22c55e; box-shadow: 0 0 0 2px #bbf7d0; }
+.agent-dot.offline  { display: block; background: #ef4444; box-shadow: 0 0 0 2px #fecaca; }
+.agent-dot.checking { display: block; background: #f59e0b; animation: pulse-dot 1s infinite; }
+@keyframes pulse-dot { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+
 /* ── Misc ───────────────────────────────────────────────────────────────────── */
 .loading { display: flex; align-items: center; justify-content: center; height: 200px; color: #9ca3af; font-size: 14px; gap: 8px; }
 .you-tag { font-size: 11px; color: #9ca3af; margin-left: 4px; }

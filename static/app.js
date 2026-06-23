@@ -40,6 +40,9 @@ const S = {
   _allWorkflows: [],
   _stepEditIndex: null,
   _savePublic: false,
+  // Local agent execution mode
+  localMode: localStorage.getItem('localMode') === '1',
+  agentPort: parseInt(localStorage.getItem('agentPort') || '8001', 10),
 };
 
 /* ═══════════════════════════ UTILITIES ═══════════════════════════════════════ */
@@ -330,6 +333,11 @@ function renderEditor(id) {
           <button class="btn btn-secondary btn-sm" onclick="openFromFile()">📂 Open</button>
           <button class="btn btn-secondary btn-sm" onclick="saveToFile()">💾 Export</button>
           <button class="btn btn-primary btn-sm" id="btn-save" onclick="showSaveDialog()">☁ Save</button>
+          <label class="local-toggle" id="local-toggle-wrap" title="Thực thi trên máy PC này (cần chạy agent.py)">
+            <input type="checkbox" id="chk-local" onchange="setLocalMode(this.checked)" ${S.localMode ? 'checked' : ''} />
+            <span>🖥 Local PC</span>
+          </label>
+          <span class="agent-dot" id="agent-dot"></span>
           <button class="btn btn-success btn-sm" id="btn-run" onclick="runWorkflow()">▶ Run</button>
         </div>
       </div>
@@ -362,6 +370,8 @@ function renderEditor(id) {
 
   document.getElementById('wf-name').addEventListener('input', e => { S.wf.name = e.target.value; });
   document.getElementById('wf-desc').addEventListener('input', e => { S.wf.description = e.target.value; });
+
+  updateAgentDot();
 
   // Auto-run
   if (location.search.includes('run=1') && id) {
@@ -486,8 +496,18 @@ function moveStep(i, dir) {
 
 /* ═══════════════════════════ EXECUTION ══════════════════════════════════════ */
 
-function runWorkflow() {
+async function runWorkflow() {
   if (S.wf.steps.length === 0) { toast('No steps to execute', 'error'); return; }
+
+  if (S.localMode) {
+    const ok = await checkAgentStatus();
+    if (!ok) {
+      toast(`Local agent không chạy — hãy chạy start_agent.bat (port ${S.agentPort})`, 'error');
+      updateAgentDot();
+      return;
+    }
+  }
+
   S.running = true;
   S.execStates = {};
   S.logs = [];
@@ -498,8 +518,11 @@ function runWorkflow() {
   if (btn) { btn.textContent = '⏹ Stop'; btn.onclick = stopWorkflow; btn.className = 'btn btn-danger btn-sm'; }
   renderSteps();
 
-  const token = S.token;
-  const ws = new WebSocket(`${WS_PROTO}//${location.host}/ws?token=${encodeURIComponent(token)}`);
+  const wsUrl = S.localMode
+    ? `ws://localhost:${S.agentPort}/ws`
+    : `${WS_PROTO}//${location.host}/ws?token=${encodeURIComponent(S.token)}`;
+
+  const ws = new WebSocket(wsUrl);
   S.ws = ws;
 
   ws.onopen = () => ws.send(JSON.stringify({ type: 'start', steps: S.wf.steps }));
@@ -511,6 +534,38 @@ function runWorkflow() {
 function stopWorkflow() {
   if (S.ws) S.ws.send(JSON.stringify({ type: 'cancel' }));
   endExecution();
+}
+
+function setLocalMode(on) {
+  S.localMode = on;
+  localStorage.setItem('localMode', on ? '1' : '0');
+  updateAgentDot();
+}
+
+async function updateAgentDot() {
+  const dot = document.getElementById('agent-dot');
+  if (!dot) return;
+  if (!S.localMode) { dot.className = 'agent-dot'; return; }
+  dot.className = 'agent-dot checking';
+  dot.title = 'Đang kiểm tra...';
+  const ok = await checkAgentStatus();
+  dot.className = 'agent-dot ' + (ok ? 'online' : 'offline');
+  dot.title = ok
+    ? `Agent đang chạy trên port ${S.agentPort}`
+    : `Agent chưa chạy — hãy chạy start_agent.bat`;
+}
+
+async function checkAgentStatus() {
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 1500);
+    const r = await fetch(`http://localhost:${S.agentPort}/health`, { signal: ctrl.signal });
+    clearTimeout(timer);
+    const d = await r.json();
+    return d.agent === true;
+  } catch {
+    return false;
+  }
 }
 
 function handleWsMsg(data) {
