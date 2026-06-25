@@ -43,10 +43,12 @@ class CreateUserRequest(BaseModel):
     username: str
     password: str
     isAdmin: bool = False
+    managerId: Optional[int] = None
 
 
 class UpdateUserRequest(BaseModel):
-    isAdmin: bool
+    isAdmin: Optional[bool] = None
+    managerId: Optional[int] = None
 
 
 class ChangePasswordRequest(BaseModel):
@@ -56,3 +58,24 @@ class ChangePasswordRequest(BaseModel):
 
 class AdminChangePasswordRequest(BaseModel):
     newPassword: str
+
+
+class PermissionRequest(BaseModel):
+    userId: int
+    canView: bool = False
+    canRun: bool = False
+    canEdit: bool = False
+    canDelete: bool = False
+
+
+class TriggerRequest(BaseModel):
+    targetWorkflowId: str
+    triggerType: str = 'on_complete'
+    triggerStepIndex: Optional[int] = None
+
+
+class ScheduleRequest(BaseModel):
+    timeOfDay: str = '09:00'
+    daysOfWeek: List[int] = []
+    daysOfMonth: List[int] = []
+    isActive: bool = True

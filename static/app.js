@@ -23,15 +23,17 @@ const ACTION_GROUPS = ['Windows GUI', 'Browser (Playwright)', 'Utility'];
 
 const WS_PROTO = location.protocol === 'https:' ? 'wss:' : 'ws:';
 
-/* ═══════════════════════════ STATE ═══════════════════════════════════════════ */
+/* ═══════════════════════════ STATE ══════════════════════════════════════════ */
 
 const S = {
   token: localStorage.getItem('token'),
   user: JSON.parse(localStorage.getItem('user') || 'null'),
   wf: { name: 'Untitled Workflow', description: '', steps: [] },
   wfId: null,
-  wfOwner: true,
-  execStates: {},   // { [index]: { status, error } }
+  // Replace wfOwner with wfPerms
+  wfPerms: { canView: true, canRun: false, canEdit: false, canDelete: false },
+  wfApiKey: null,
+  execStates: {},
   logs: [],
   running: false,
   ws: null,
@@ -40,51 +42,36 @@ const S = {
   _allWorkflows: [],
   _stepEditIndex: null,
   _savePublic: false,
-  // Local agent execution mode
   localMode: localStorage.getItem('localMode') === '1',
   agentPort: parseInt(localStorage.getItem('agentPort') || '8001', 10),
   _stepMasked: false,
 };
 
-/* ═══════════════════════════ UTILITIES ═══════════════════════════════════════ */
+/* ═══════════════════════════ UTILITIES ══════════════════════════════════════ */
 
 function uuid() {
-  // crypto.randomUUID() requires a secure context (HTTPS/localhost).
-  // Fall back to getRandomValues() which works over plain HTTP on LAN.
   if (crypto.randomUUID) return crypto.randomUUID();
   return '10000000-1000-4000-8000-100000000000'.replace(/[018]/g, c =>
     (+c ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> +c / 4).toString(16));
 }
 
-/**
- * Nếu user paste raw HTML element (copy từ F12 DevTools),
- * trả về CSS selector phù hợp nhất. Trả về null nếu không phải HTML.
- */
 function htmlToSelector(raw) {
   const t = raw.trim();
   if (!t.startsWith('<')) return null;
-
   const tagM = t.match(/^<(\w+)/);
   const tag = tagM ? tagM[1].toLowerCase() : '';
-
-  // id → #id (chính xác nhất)
   const idM = t.match(/\bid=["']([^"']+)['"]/);
   if (idM) return `#${idM[1]}`;
-
-  // class → tag.class1.class2
   const clsM = t.match(/\bclass=["']([^"']+)['"]/);
   if (clsM) {
     const classes = clsM[1].trim().split(/\s+/).join('.');
     return tag ? `${tag}.${classes}` : `.${classes}`;
   }
-
-  // text content → text=Sign In
   const textM = t.match(/>([^<]+)</);
   if (textM) {
     const text = textM[1].trim();
     if (text) return `text=${text}`;
   }
-
   return null;
 }
 
@@ -109,7 +96,7 @@ function toast(msg, type = 'success') {
   }, 2800);
 }
 
-/* ═══════════════════════════ API ═════════════════════════════════════════════ */
+/* ═══════════════════════════ API ════════════════════════════════════════════ */
 
 async function api(method, path, body) {
   const opts = { method, headers: { 'Content-Type': 'application/json' } };
@@ -122,7 +109,7 @@ async function api(method, path, body) {
   return data;
 }
 
-/* ═══════════════════════════ AUTH ════════════════════════════════════════════ */
+/* ═══════════════════════════ AUTH ══════════════════════════════════════════ */
 
 function setAuth(user, token) {
   S.user = user; S.token = token;
@@ -136,7 +123,7 @@ function doLogout() {
   navigate('/login');
 }
 
-/* ═══════════════════════════ ROUTER ══════════════════════════════════════════ */
+/* ═══════════════════════════ ROUTER ════════════════════════════════════════ */
 
 function navigate(path) { location.hash = '#' + path; }
 
@@ -154,7 +141,7 @@ function router() {
 window.addEventListener('hashchange', router);
 window.addEventListener('DOMContentLoaded', router);
 
-/* ═══════════════════════════ LAYOUT ══════════════════════════════════════════ */
+/* ═══════════════════════════ LAYOUT ════════════════════════════════════════ */
 
 function renderLayout(innerHtml) {
   const hash = location.hash.slice(1);
@@ -180,7 +167,7 @@ function renderLayout(innerHtml) {
     </div>`;
 }
 
-/* ═══════════════════════════ LOGIN PAGE ══════════════════════════════════════ */
+/* ═══════════════════════════ LOGIN PAGE ════════════════════════════════════ */
 
 function renderLogin() {
   document.getElementById('app').innerHTML = `
@@ -222,7 +209,7 @@ async function doLogin() {
   } catch (e) { toast(e.message, 'error'); }
 }
 
-/* ═══════════════════════════ DASHBOARD PAGE ══════════════════════════════════ */
+/* ═══════════════════════════ DASHBOARD PAGE ════════════════════════════════ */
 
 function renderDashboard() {
   renderLayout(`
@@ -267,12 +254,15 @@ function switchTab(tab) {
 }
 
 function renderWfList() {
-  const mine = S._allWorkflows.filter(w => Number(w.ownerId) === Number(S.user?.id));
-  const comm = S._allWorkflows.filter(w => Number(w.ownerId) !== Number(S.user?.id) && w.isPublic);
+  const uid = Number(S.user?.id);
+  const mine = S._allWorkflows.filter(w => {
+    const p = w.myPerms || {};
+    return Number(w.ownerId) === uid || p.canEdit || p.canDelete || p.canRun;
+  });
+  const comm = S._allWorkflows.filter(w => Number(w.ownerId) !== uid && w.isPublic);
   const list = (S.dashTab === 'mine' ? mine : comm)
     .filter(w => !S.dashSearch || w.name.toLowerCase().includes(S.dashSearch.toLowerCase()));
 
-  // Update tab counts
   const tabs = document.querySelectorAll('.tab');
   if (tabs[0]) tabs[0].textContent = `My Workflows (${mine.length})`;
   if (tabs[1]) tabs[1].textContent = `Community (${comm.length})`;
@@ -291,12 +281,18 @@ function renderWfList() {
 }
 
 function wfCard(wf) {
-  const isOwner = Number(wf.ownerId) === Number(S.user?.id);
+  const p = wf.myPerms || {};
+  const canDelete = p.canDelete || false;
+  const canEdit = p.canEdit || false;
+  const apiUrl = wf.apiKey ? `${location.origin}/api/run/${wf.id}?api_key=${wf.apiKey}` : null;
   return `
     <div class="wf-card">
       <div class="wf-card-head">
         <span class="wf-card-title">${esc(wf.name)}</span>
-        <span class="badge ${wf.isPublic ? 'badge-public' : 'badge-private'}">${wf.isPublic ? '🌐 Public' : '🔒 Private'}</span>
+        <div style="display:flex;gap:4px;align-items:center">
+          <span class="badge ${wf.isPublic ? 'badge-public' : 'badge-private'}">${wf.isPublic ? '🌐 Public' : '🔒 Private'}</span>
+          ${!canEdit && wf.isPublic ? '<span class="badge badge-ro">👁 R/O</span>' : ''}
+        </div>
       </div>
       ${wf.description ? `<div class="wf-card-desc">${esc(wf.description)}</div>` : ''}
       <div class="wf-card-meta">
@@ -305,11 +301,16 @@ function wfCard(wf) {
         <span>🕐 ${fmtDate(wf.updatedAt)}</span>
       </div>
       <div class="wf-card-actions">
-        <button class="btn btn-success btn-sm" style="flex:1" onclick="navigate('/workflow/${esc(wf.id)}?run=1')">▶ Run</button>
+        ${p.canRun ? `<button class="btn btn-success btn-sm" style="flex:1" onclick="navigate('/workflow/${esc(wf.id)}?run=1')">▶ Run</button>` : ''}
         <button class="btn btn-secondary btn-sm" onclick="navigate('/workflow/${esc(wf.id)}')">✏</button>
-        ${isOwner ? `<button class="btn btn-danger btn-sm" onclick="deleteDashWf('${esc(wf.id)}','${esc(wf.name)}')">✕</button>` : ''}
+        ${apiUrl ? `<button class="btn btn-secondary btn-sm" title="Copy API URL" onclick="copyText('${esc(apiUrl)}','API URL copied')">📋</button>` : ''}
+        ${canDelete ? `<button class="btn btn-danger btn-sm" onclick="deleteDashWf('${esc(wf.id)}','${esc(wf.name)}')">✕</button>` : ''}
       </div>
     </div>`;
+}
+
+function copyText(text, msg = 'Copied') {
+  navigator.clipboard.writeText(text).then(() => toast(msg)).catch(() => toast('Copy failed', 'error'));
 }
 
 async function deleteDashWf(id, name) {
@@ -322,12 +323,13 @@ async function deleteDashWf(id, name) {
   } catch (e) { toast(e.message, 'error'); }
 }
 
-/* ═══════════════════════════ WORKFLOW EDITOR ════════════════════════════════ */
+/* ═══════════════════════════ WORKFLOW EDITOR ══════════════════════════════ */
 
 function renderEditor(id) {
   S.wfId = id || null;
   S.wf = { name: 'Untitled Workflow', description: '', steps: [] };
-  S.wfOwner = true;
+  S.wfPerms = { canView: true, canRun: false, canEdit: false, canDelete: false };
+  S.wfApiKey = null;
   S.execStates = {};
   S.logs = [];
   S.running = false;
@@ -341,13 +343,14 @@ function renderEditor(id) {
           <button class="btn btn-secondary btn-sm" onclick="openFromFile()">📂 Open</button>
           <button class="btn btn-secondary btn-sm" onclick="saveToFile()">💾 Export</button>
           <span id="readonly-badge" class="badge-readonly" style="display:none">👁 Read Only</span>
-          <button class="btn btn-primary btn-sm" id="btn-save" onclick="showSaveDialog()">☁ Save</button>
+          <button class="btn btn-primary btn-sm" id="btn-save" onclick="showSaveDialog()" style="display:none">☁ Save</button>
+          <button class="btn btn-secondary btn-sm" id="btn-settings" onclick="openWorkflowSettings()" style="display:none">⚙ Settings</button>
           <label class="local-toggle" id="local-toggle-wrap" title="Thực thi trên máy PC này (cần chạy agent.py)">
             <input type="checkbox" id="chk-local" onchange="setLocalMode(this.checked)" ${S.localMode ? 'checked' : ''} />
             <span>🖥 Local PC</span>
           </label>
           <span class="agent-dot" id="agent-dot"></span>
-          <button class="btn btn-success btn-sm" id="btn-run" onclick="runWorkflow()">▶ Run</button>
+          <button class="btn btn-success btn-sm" id="btn-run" onclick="runWorkflow()" style="display:none">▶ Run</button>
         </div>
       </div>
       <div class="editor-desc-bar">
@@ -357,7 +360,7 @@ function renderEditor(id) {
         <div class="steps-panel" id="steps-panel">
           <div class="steps-header">
             <span class="steps-title" id="steps-title">Steps (0)</span>
-            <button class="btn btn-primary btn-sm" id="btn-add" onclick="openAddStep()">＋ Add Step</button>
+            <button class="btn btn-primary btn-sm" id="btn-add" onclick="openAddStep()" style="display:none">＋ Add Step</button>
           </div>
           <div class="steps-list" id="steps-list"><div class="loading">Loading...</div></div>
         </div>
@@ -374,6 +377,8 @@ function renderEditor(id) {
   if (id) {
     loadEditorWorkflow(id);
   } else {
+    // New workflow: owner gets full perms
+    S.wfPerms = { canView: true, canRun: true, canEdit: true, canDelete: true };
     syncEditorUI();
   }
 
@@ -382,7 +387,6 @@ function renderEditor(id) {
 
   updateAgentDot();
 
-  // Auto-run
   if (location.search.includes('run=1') && id) {
     // Will run after load
   }
@@ -393,7 +397,8 @@ async function loadEditorWorkflow(id) {
     const wf = await api('GET', `/workflows/${id}`);
     if (!wf) return;
     S.wf = { name: wf.name, description: wf.description, steps: wf.steps };
-    S.wfOwner = Number(wf.ownerId) === Number(S.user?.id) || !!S.user?.isAdmin;
+    S.wfPerms = wf.myPerms || { canView: true, canRun: false, canEdit: false, canDelete: false };
+    S.wfApiKey = wf.apiKey || null;
     syncEditorUI();
 
     if (location.search.includes('run=1')) {
@@ -412,15 +417,23 @@ function syncEditorUI() {
   if (nameEl) nameEl.value = S.wf.name;
   if (descEl) descEl.value = S.wf.description;
 
-  const isOwner = S.wfOwner;
-  if (nameEl) nameEl.disabled = !isOwner;
-  if (descEl) descEl.disabled = !isOwner;
-  const btnSave   = document.getElementById('btn-save');
-  const btnAdd    = document.getElementById('btn-add');
-  const roLabel   = document.getElementById('readonly-badge');
-  if (btnSave) btnSave.style.display = isOwner ? '' : 'none';
-  if (btnAdd)  btnAdd.style.display  = isOwner ? '' : 'none';
-  if (roLabel) roLabel.style.display = isOwner ? 'none' : '';
+  const canEdit = S.wfPerms.canEdit;
+  const canRun  = S.wfPerms.canRun;
+
+  if (nameEl) nameEl.disabled = !canEdit;
+  if (descEl) descEl.disabled = !canEdit;
+
+  const btnSave     = document.getElementById('btn-save');
+  const btnAdd      = document.getElementById('btn-add');
+  const btnSettings = document.getElementById('btn-settings');
+  const btnRun      = document.getElementById('btn-run');
+  const roLabel     = document.getElementById('readonly-badge');
+
+  if (btnSave)     btnSave.style.display     = canEdit ? '' : 'none';
+  if (btnAdd)      btnAdd.style.display      = canEdit ? '' : 'none';
+  if (btnSettings) btnSettings.style.display = (canEdit && S.wfId) ? '' : 'none';
+  if (btnRun)      btnRun.style.display      = canRun  ? '' : 'none';
+  if (roLabel)     roLabel.style.display     = (!canEdit && !canRun) ? '' : 'none';
 
   renderSteps();
 }
@@ -433,10 +446,12 @@ function renderSteps() {
   if (!list) return;
   if (title) title.textContent = `Steps (${S.wf.steps.length})`;
 
+  const canEdit = S.wfPerms.canEdit;
+
   if (S.wf.steps.length === 0) {
     list.innerHTML = `<div class="step-empty">
       <p style="margin-bottom:10px;color:#6b7280">No steps yet. Start building your automation.</p>
-      ${S.wfOwner ? '<button class="btn btn-primary" onclick="openAddStep()">＋ Add First Step</button>' : ''}
+      ${canEdit ? '<button class="btn btn-primary" onclick="openAddStep()">＋ Add First Step</button>' : ''}
     </div>`;
     return;
   }
@@ -449,6 +464,7 @@ function stepCardHtml(step, i) {
   const info = ACTION_TYPES[step.actionType] || { label: step.actionType, badgeClass: 'ab-delay' };
   const numClass = status === 'running' ? 'running' : status === 'done' ? 'done' : status === 'failed' ? 'failed' : '';
   const numContent = status === 'running' ? '⟳' : status === 'done' ? '✓' : status === 'failed' ? '✗' : i + 1;
+  const canEdit = S.wfPerms.canEdit;
 
   return `
     <div class="step-card step-${status}" data-idx="${i}">
@@ -463,7 +479,7 @@ function stepCardHtml(step, i) {
         ${step.value  ? `<div class="step-target">✎ ${step.masked ? '••••••••' : esc(step.value)}</div>`  : ''}
         ${es.error    ? `<div class="step-error">${esc(es.error)}</div>`        : ''}
       </div>
-      ${S.wfOwner && !S.running ? `
+      ${canEdit && !S.running ? `
         <div class="step-controls">
           <button class="btn btn-ghost btn-icon" title="Move up"   ${i === 0 ? 'disabled' : ''} onclick="moveStep(${i},-1)">↑</button>
           <button class="btn btn-ghost btn-icon" title="Move down" ${i === S.wf.steps.length - 1 ? 'disabled' : ''} onclick="moveStep(${i},1)">↓</button>
@@ -480,7 +496,7 @@ function updateStepCard(index) {
   card.outerHTML = stepCardHtml(step, index);
 }
 
-/* ── Step CRUD ────────────────────────────────────────────────────────────── */
+/* ── Step CRUD ──────────────────────────────────────────────────────────── */
 
 function openAddStep() {
   S._stepEditIndex = null;
@@ -505,7 +521,7 @@ function moveStep(i, dir) {
   renderSteps();
 }
 
-/* ═══════════════════════════ EXECUTION ══════════════════════════════════════ */
+/* ═══════════════════════════ EXECUTION ════════════════════════════════════ */
 
 async function runWorkflow() {
   if (S.wf.steps.length === 0) { toast('No steps to execute', 'error'); return; }
@@ -536,7 +552,11 @@ async function runWorkflow() {
   const ws = new WebSocket(wsUrl);
   S.ws = ws;
 
-  ws.onopen = () => ws.send(JSON.stringify({ type: 'start', steps: S.wf.steps }));
+  ws.onopen = () => ws.send(JSON.stringify({
+    type: 'start',
+    steps: S.wf.steps,
+    workflowId: S.wfId || undefined,
+  }));
   ws.onmessage = e => handleWsMsg(JSON.parse(e.data));
   ws.onerror = () => { toast('WebSocket error', 'error'); endExecution(); };
   ws.onclose = () => { if (S.running) endExecution(); };
@@ -633,7 +653,7 @@ function toggleLog(show) {
   if (panel) panel.style.display = show ? '' : 'none';
 }
 
-/* ═══════════════════════════ STEP MODAL ══════════════════════════════════════ */
+/* ═══════════════════════════ STEP MODAL ═══════════════════════════════════ */
 
 function openStepModal(step) {
   S._stepMasked = !!step.masked;
@@ -732,11 +752,10 @@ function updateModalFields() {
       : info.coordPicker ? 'x,y (e.g. 500,300)'
       : '';
 
-    // Paste handler: tự convert HTML element → CSS selector
     tEl.onpaste = isBrowserSelector ? function (e) {
       const text = (e.clipboardData || window.clipboardData).getData('text');
       const sel = htmlToSelector(text);
-      if (!sel) return; // không phải HTML, cho paste bình thường
+      if (!sel) return;
       e.preventDefault();
       tEl.value = sel;
       if (hint) {
@@ -818,9 +837,8 @@ function toggleValueMask() {
   const inp = document.getElementById('m-value');
   const btn = document.getElementById('btn-mask-toggle');
   if (!inp || !btn) return;
-  // If currently masked and user is NOT owner, block reveal
-  if (S._stepMasked && !S.wfOwner) {
-    toast('Chỉ owner của workflow mới có thể xem nội dung ẩn', 'error');
+  if (S._stepMasked && !S.wfPerms.canEdit) {
+    toast('Chỉ editor của workflow mới có thể xem nội dung ẩn', 'error');
     return;
   }
   S._stepMasked = !S._stepMasked;
@@ -856,7 +874,7 @@ function submitStep(stepId) {
   renderSteps();
 }
 
-/* ═══════════════════════════ SAVE DIALOG ════════════════════════════════════ */
+/* ═══════════════════════════ SAVE DIALOG ══════════════════════════════════ */
 
 function showSaveDialog() {
   if (!document.getElementById('wf-name')) return;
@@ -909,11 +927,18 @@ async function doSave() {
     S.wf.description = document.getElementById('wf-desc')?.value.trim() || S.wf.description;
     const payload = { name: S.wf.name, description: S.wf.description, steps: S.wf.steps, isPublic: S._savePublic };
     if (S.wfId) {
-      await api('PUT', `/workflows/${S.wfId}`, payload);
+      const data = await api('PUT', `/workflows/${S.wfId}`, payload);
+      if (data) { S.wfApiKey = data.apiKey; syncEditorUI(); }
       toast('Workflow updated');
     } else {
       const data = await api('POST', '/workflows', payload);
-      if (data) { S.wfId = data.id; history.replaceState(null, '', `#/workflow/${data.id}`); }
+      if (data) {
+        S.wfId = data.id;
+        S.wfApiKey = data.apiKey;
+        S.wfPerms = data.myPerms || S.wfPerms;
+        history.replaceState(null, '', `#/workflow/${data.id}`);
+        syncEditorUI();
+      }
       toast('Workflow saved');
     }
     closeModal();
@@ -923,7 +948,7 @@ async function doSave() {
   }
 }
 
-/* ═══════════════════════════ FILE OPERATIONS ════════════════════════════════ */
+/* ═══════════════════════════ FILE OPERATIONS ══════════════════════════════ */
 
 function saveToFile() {
   S.wf.name = document.getElementById('wf-name')?.value.trim() || S.wf.name;
@@ -954,7 +979,313 @@ function openFromFile() {
   inp.click();
 }
 
-/* ═══════════════════════════ ADMIN PAGE ══════════════════════════════════════ */
+/* ═══════════════════════════ WORKFLOW SETTINGS MODAL ═════════════════════ */
+
+let _settingsTab = 'permissions';
+
+async function openWorkflowSettings() {
+  if (!S.wfId) return;
+  _settingsTab = 'permissions';
+  renderSettingsModal();
+}
+
+function renderSettingsModal() {
+  const root = document.getElementById('modal-root');
+  root.innerHTML = `
+    <div class="modal-overlay" onclick="closeModal(event)">
+      <div class="modal settings-modal" onclick="event.stopPropagation()">
+        <div class="modal-header">
+          <span class="modal-title">⚙ Workflow Settings</span>
+          <button class="btn-close-modal" onclick="closeModal()">✕</button>
+        </div>
+        <div class="settings-tabs">
+          <button class="stab ${_settingsTab==='permissions'?'active':''}" onclick="switchSettingsTab('permissions')">🔑 Permissions</button>
+          <button class="stab ${_settingsTab==='api'?'active':''}" onclick="switchSettingsTab('api')">🔌 API</button>
+          <button class="stab ${_settingsTab==='triggers'?'active':''}" onclick="switchSettingsTab('triggers')">⚡ Triggers</button>
+          <button class="stab ${_settingsTab==='schedule'?'active':''}" onclick="switchSettingsTab('schedule')">🕐 Schedule</button>
+        </div>
+        <div class="modal-body" id="settings-body" style="min-height:200px">
+          <div class="loading">Loading...</div>
+        </div>
+      </div>
+    </div>`;
+  loadSettingsTab();
+}
+
+function switchSettingsTab(tab) {
+  _settingsTab = tab;
+  document.querySelectorAll('.stab').forEach(b => b.classList.toggle('active', b.textContent.toLowerCase().includes(tab.toLowerCase().slice(0,3))));
+  loadSettingsTab();
+}
+
+async function loadSettingsTab() {
+  const body = document.getElementById('settings-body');
+  if (!body) return;
+  body.innerHTML = '<div class="loading">Loading...</div>';
+  try {
+    if (_settingsTab === 'permissions') await renderPermissionsTab(body);
+    else if (_settingsTab === 'api')    await renderApiTab(body);
+    else if (_settingsTab === 'triggers') await renderTriggersTab(body);
+    else if (_settingsTab === 'schedule') await renderScheduleTab(body);
+  } catch (e) {
+    body.innerHTML = `<div style="color:#dc2626;padding:10px">${esc(e.message)}</div>`;
+  }
+}
+
+/* ── Tab 1: Permissions ──────────────────────────────────────────────────── */
+
+async function renderPermissionsTab(body) {
+  const perms = await api('GET', `/workflows/${S.wfId}/permissions`) || [];
+  const allUsers = await api('GET', '/users') || [];
+
+  const rows = perms.map(p => `
+    <tr>
+      <td>${esc(p.username)}</td>
+      <td><input type="checkbox" ${p.canView?'checked':''} onchange="updatePerm(${p.id},'canView',this.checked,'${p.userId}')" /></td>
+      <td><input type="checkbox" ${p.canRun?'checked':''} onchange="updatePerm(${p.id},'canRun',this.checked,'${p.userId}')" /></td>
+      <td><input type="checkbox" ${p.canEdit?'checked':''} onchange="updatePerm(${p.id},'canEdit',this.checked,'${p.userId}')" /></td>
+      <td><input type="checkbox" ${p.canDelete?'checked':''} onchange="updatePerm(${p.id},'canDelete',this.checked,'${p.userId}')" /></td>
+      <td><button class="btn btn-danger btn-sm" onclick="deletePerm(${p.id})">✕</button></td>
+    </tr>`).join('');
+
+  const existingIds = new Set(perms.map(p => p.userId));
+  const availUsers = allUsers.filter(u => !existingIds.has(u.id) && !u.is_admin);
+  const userOpts = availUsers.map(u => `<option value="${u.id}">${esc(u.username)}</option>`).join('');
+
+  body.innerHTML = `
+    <div class="perm-note">Admins always have full access.</div>
+    <table class="perm-table">
+      <thead><tr><th>User</th><th>View</th><th>Run</th><th>Edit</th><th>Delete</th><th></th></tr></thead>
+      <tbody id="perm-rows">${rows}</tbody>
+    </table>
+    <div class="perm-add-row">
+      <select class="input" id="perm-user-sel" style="flex:1">${userOpts || '<option value="">No users available</option>'}</select>
+      <label><input type="checkbox" id="pa-view" checked /> View</label>
+      <label><input type="checkbox" id="pa-run" checked /> Run</label>
+      <label><input type="checkbox" id="pa-edit" /> Edit</label>
+      <label><input type="checkbox" id="pa-delete" /> Delete</label>
+      <button class="btn btn-primary btn-sm" onclick="addPerm()">Add</button>
+    </div>`;
+
+  // Store perm data for inline updates
+  window._permCache = {};
+  perms.forEach(p => { window._permCache[p.id] = { ...p }; });
+}
+
+async function updatePerm(permId, field, value, userId) {
+  const cache = window._permCache[permId];
+  if (!cache) return;
+  cache[field] = value;
+  try {
+    await api('POST', `/workflows/${S.wfId}/permissions`, {
+      userId: cache.userId,
+      canView: cache.canView,
+      canRun: cache.canRun,
+      canEdit: cache.canEdit,
+      canDelete: cache.canDelete,
+    });
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function deletePerm(permId) {
+  try {
+    await api('DELETE', `/workflows/${S.wfId}/permissions/${permId}`);
+    delete window._permCache[permId];
+    await loadSettingsTab();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function addPerm() {
+  const sel = document.getElementById('perm-user-sel');
+  if (!sel || !sel.value) { toast('Select a user', 'error'); return; }
+  const userId = parseInt(sel.value);
+  const canView   = document.getElementById('pa-view')?.checked || false;
+  const canRun    = document.getElementById('pa-run')?.checked  || false;
+  const canEdit   = document.getElementById('pa-edit')?.checked || false;
+  const canDelete = document.getElementById('pa-delete')?.checked || false;
+  try {
+    await api('POST', `/workflows/${S.wfId}/permissions`, { userId, canView, canRun, canEdit, canDelete });
+    await loadSettingsTab();
+    toast('Permission added');
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+/* ── Tab 2: API ──────────────────────────────────────────────────────────── */
+
+let _apiKeyRevealed = false;
+
+async function renderApiTab(body) {
+  const apiKey = S.wfApiKey || '(save workflow first to get API key)';
+  const apiUrl = `${location.origin}/api/run/${S.wfId}?api_key=${apiKey}`;
+  const maskedKey = apiKey.slice(0, 6) + '••••••••••••••••••••';
+  const curlCmd = `curl -X POST "${apiUrl}"`;
+
+  body.innerHTML = `
+    <div class="api-section">
+      <div class="form-group">
+        <label class="form-label">API Key</label>
+        <div class="input-with-btn">
+          <input class="input" id="api-key-inp" type="password" value="${esc(apiKey)}" readonly />
+          <button class="btn btn-secondary btn-sm" onclick="toggleApiKey()">👁</button>
+        </div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">API Endpoint</label>
+        <div class="input-with-btn">
+          <input class="input" id="api-url-inp" value="${esc(apiUrl)}" readonly />
+          <button class="btn btn-secondary btn-sm" onclick="copyText(document.getElementById('api-url-inp').value,'URL copied')">📋</button>
+        </div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Example cURL</label>
+        <div class="code-block" id="curl-block">${esc(curlCmd)}</div>
+        <button class="btn btn-secondary btn-sm" style="margin-top:6px" onclick="copyText(document.getElementById('curl-block').textContent,'cURL copied')">📋 Copy cURL</button>
+      </div>
+      <button class="btn btn-danger btn-sm" style="margin-top:10px" onclick="regenerateApiKey()">🔄 Regenerate API Key</button>
+    </div>`;
+}
+
+function toggleApiKey() {
+  const inp = document.getElementById('api-key-inp');
+  if (!inp) return;
+  inp.type = inp.type === 'password' ? 'text' : 'password';
+}
+
+async function regenerateApiKey() {
+  if (!confirm('Regenerate API key? The old key will stop working.')) return;
+  try {
+    const data = await api('POST', `/workflows/${S.wfId}/permissions/apikey`);
+    S.wfApiKey = data.apiKey;
+    await loadSettingsTab();
+    toast('API key regenerated');
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+/* ── Tab 3: Triggers ─────────────────────────────────────────────────────── */
+
+async function renderTriggersTab(body) {
+  const triggers = await api('GET', `/workflows/${S.wfId}/triggers`) || [];
+  const allWfs = S._allWorkflows.filter(w => w.id !== S.wfId);
+
+  const rows = triggers.map(t => `
+    <tr>
+      <td>${esc(t.sourceWorkflowName)}</td>
+      <td>${t.triggerType === 'on_complete' ? 'On complete' : `On step #${t.triggerStepIndex}`}</td>
+      <td><button class="btn btn-danger btn-sm" onclick="deleteTrigger(${t.id})">✕</button></td>
+    </tr>`).join('');
+
+  const wfOpts = allWfs.map(w => `<option value="${w.id}">${esc(w.name)}</option>`).join('');
+
+  body.innerHTML = `
+    <p style="font-size:12px;color:#6b7280;margin-bottom:8px">Run this workflow when another workflow completes or reaches a step.</p>
+    <table class="perm-table" style="margin-bottom:12px">
+      <thead><tr><th>Source Workflow</th><th>When</th><th></th></tr></thead>
+      <tbody>${rows || '<tr><td colspan="3" style="color:#9ca3af;text-align:center">No triggers yet</td></tr>'}</tbody>
+    </table>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <select class="input" id="trig-wf" style="flex:1;min-width:140px">${wfOpts || '<option value="">No workflows</option>'}</select>
+      <label style="display:flex;gap:4px;align-items:center;font-size:13px">
+        <input type="radio" name="trig-type" value="on_complete" checked /> On complete
+      </label>
+      <label style="display:flex;gap:4px;align-items:center;font-size:13px">
+        <input type="radio" name="trig-type" value="on_step" /> On step #
+        <input class="input" type="number" id="trig-step" min="1" value="1" style="width:60px" />
+      </label>
+      <button class="btn btn-primary btn-sm" onclick="addTrigger()">Add</button>
+    </div>`;
+}
+
+async function addTrigger() {
+  const wfSel = document.getElementById('trig-wf');
+  if (!wfSel || !wfSel.value) { toast('Select source workflow', 'error'); return; }
+  const trigType = document.querySelector('input[name="trig-type"]:checked')?.value || 'on_complete';
+  const stepIdx = trigType === 'on_step' ? parseInt(document.getElementById('trig-step')?.value || '1') : null;
+  try {
+    await api('POST', `/workflows/${S.wfId}/triggers`, {
+      targetWorkflowId: wfSel.value,
+      triggerType: trigType,
+      triggerStepIndex: stepIdx,
+    });
+    await loadSettingsTab();
+    toast('Trigger added');
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function deleteTrigger(triggerId) {
+  try {
+    await api('DELETE', `/workflows/${S.wfId}/triggers/${triggerId}`);
+    await loadSettingsTab();
+    toast('Trigger removed');
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+/* ── Tab 4: Schedule ─────────────────────────────────────────────────────── */
+
+async function renderScheduleTab(body) {
+  const sched = await api('GET', `/workflows/${S.wfId}/schedule`);
+
+  const tod = sched?.timeOfDay || '09:00';
+  const dow = sched?.daysOfWeek || [];
+  const dom = sched?.daysOfMonth || [];
+  const active = sched?.isActive ?? true;
+
+  const dayNames = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  const dowChecks = dayNames.map((d, i) => `
+    <label style="font-size:12px;display:flex;gap:3px;align-items:center">
+      <input type="checkbox" value="${i}" ${dow.includes(i)?'checked':''} class="dow-cb" /> ${d}
+    </label>`).join('');
+
+  const domGrid = Array.from({length:31}, (_,i) => i+1).map(d => `
+    <label style="font-size:11px;display:flex;gap:2px;align-items:center">
+      <input type="checkbox" value="${d}" ${dom.includes(d)?'checked':''} class="dom-cb" /> ${d}
+    </label>`).join('');
+
+  body.innerHTML = `
+    <div class="form-group">
+      <label class="form-label" style="display:flex;align-items:center;gap:10px">
+        <input type="checkbox" id="sched-active" ${active?'checked':''} />
+        Schedule enabled
+      </label>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Time of day</label>
+      <input class="input" type="time" id="sched-time" value="${esc(tod)}" style="max-width:120px" />
+    </div>
+    <div class="form-group">
+      <label class="form-label">Days of week (empty = every day)</label>
+      <div style="display:flex;gap:10px;flex-wrap:wrap">${dowChecks}</div>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Days of month (empty = every day)</label>
+      <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px;max-width:280px">${domGrid}</div>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:8px">
+      <button class="btn btn-primary btn-sm" onclick="saveSchedule()">💾 Save Schedule</button>
+      ${sched ? `<button class="btn btn-danger btn-sm" onclick="deleteSchedule()">Delete</button>` : ''}
+    </div>`;
+}
+
+async function saveSchedule() {
+  const timeOfDay  = document.getElementById('sched-time')?.value || '09:00';
+  const isActive   = document.getElementById('sched-active')?.checked ?? true;
+  const daysOfWeek = [...document.querySelectorAll('.dow-cb:checked')].map(e => parseInt(e.value));
+  const daysOfMonth = [...document.querySelectorAll('.dom-cb:checked')].map(e => parseInt(e.value));
+  try {
+    await api('PUT', `/workflows/${S.wfId}/schedule`, { timeOfDay, isActive, daysOfWeek, daysOfMonth });
+    toast('Schedule saved');
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function deleteSchedule() {
+  if (!confirm('Delete schedule?')) return;
+  try {
+    await api('DELETE', `/workflows/${S.wfId}/schedule`);
+    await loadSettingsTab();
+    toast('Schedule deleted');
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+/* ═══════════════════════════ ADMIN PAGE ════════════════════════════════════ */
 
 async function renderAdmin() {
   renderLayout(`
@@ -983,7 +1314,7 @@ function renderUserTable(users) {
   if (!el) return;
   el.innerHTML = `
     <table>
-      <thead><tr><th>User</th><th>Role</th><th>Created</th><th></th></tr></thead>
+      <thead><tr><th>User</th><th>Role</th><th>Manager</th><th>Created</th><th></th></tr></thead>
       <tbody>
         ${users.map(u => `
           <tr>
@@ -993,6 +1324,7 @@ function renderUserTable(users) {
               ${u.id === S.user.id ? '<span class="you-tag">(you)</span>' : ''}
             </div></td>
             <td><span class="badge-role ${u.is_admin ? 'admin' : 'user'}">${u.is_admin ? '⚡ Admin' : 'User'}</span></td>
+            <td style="font-size:12px;color:#6b7280">${u.is_admin ? '—' : (u.managerUsername ? esc(u.managerUsername) : '<em>none</em>')}</td>
             <td style="color:#9ca3af;font-size:12px">${fmtDate(u.created_at)}</td>
             <td>
               <div class="table-actions">
@@ -1003,6 +1335,8 @@ function renderUserTable(users) {
                   onclick="toggleAdmin(${u.id},${u.is_admin})" style="color:${u.is_admin ? '#f97316' : '#2563eb'}">
                   ${u.is_admin ? '🔓' : '🛡'}
                 </button>
+                ${!u.is_admin ? `<button class="btn btn-ghost btn-sm" title="Change manager"
+                  onclick="openChangeManager(${u.id},'${esc(u.username)}',${u.managerId||'null'})">👥</button>` : ''}
                 <button class="btn btn-danger btn-sm" title="Delete" onclick="deleteUser(${u.id},'${esc(u.username)}')">✕</button>
                 ` : ''}
               </div>
@@ -1013,52 +1347,107 @@ function renderUserTable(users) {
 }
 
 function openAddUser() {
-  document.getElementById('modal-root').innerHTML = `
-    <div class="modal-overlay" onclick="closeModal(event)">
-      <div class="modal" style="max-width:380px" onclick="event.stopPropagation()">
-        <div class="modal-header">
-          <span class="modal-title">＋ New User</span>
-          <button class="btn-close-modal" onclick="closeModal()">✕</button>
-        </div>
-        <div class="modal-body">
-          <div class="form-group">
-            <label class="form-label">Username *</label>
-            <input class="input" id="nu-user" placeholder="Enter username" />
+  // We need to fetch users to populate manager dropdown
+  api('GET', '/users').then(users => {
+    const nonAdminUsers = (users || []).filter(u => !u.is_admin);
+    const mgrOpts = `<option value="">Default (first admin)</option>` +
+      nonAdminUsers.map(u => `<option value="${u.id}">${esc(u.username)}</option>`).join('');
+
+    document.getElementById('modal-root').innerHTML = `
+      <div class="modal-overlay" onclick="closeModal(event)">
+        <div class="modal" style="max-width:380px" onclick="event.stopPropagation()">
+          <div class="modal-header">
+            <span class="modal-title">＋ New User</span>
+            <button class="btn-close-modal" onclick="closeModal()">✕</button>
           </div>
-          <div class="form-group">
-            <label class="form-label">Password *</label>
-            <input class="input" type="password" id="nu-pass" placeholder="Min. 6 characters" />
+          <div class="modal-body">
+            <div class="form-group">
+              <label class="form-label">Username *</label>
+              <input class="input" id="nu-user" placeholder="Enter username" />
+            </div>
+            <div class="form-group">
+              <label class="form-label">Password *</label>
+              <input class="input" type="password" id="nu-pass" placeholder="Min. 6 characters" />
+            </div>
+            <div class="form-group">
+              <label class="form-label">Manager</label>
+              <select class="input" id="nu-mgr">${mgrOpts}</select>
+            </div>
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;color:#374151">
+              <input type="checkbox" id="nu-admin" style="accent-color:#2563eb" onchange="document.getElementById('nu-mgr').disabled=this.checked" />
+              Grant admin privileges
+            </label>
           </div>
-          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;color:#374151">
-            <input type="checkbox" id="nu-admin" style="accent-color:#2563eb" />
-            Grant admin privileges
-          </label>
+          <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+            <button class="btn btn-primary" onclick="doAddUser()">Create User</button>
+          </div>
         </div>
-        <div class="modal-footer">
-          <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-          <button class="btn btn-primary" onclick="doAddUser()">Create User</button>
-        </div>
-      </div>
-    </div>`;
-  document.getElementById('nu-user').focus();
+      </div>`;
+    document.getElementById('nu-user').focus();
+  });
 }
 
 async function doAddUser() {
   const username = document.getElementById('nu-user')?.value.trim();
   const password = document.getElementById('nu-pass')?.value;
   const isAdmin  = document.getElementById('nu-admin')?.checked;
+  const mgrVal   = document.getElementById('nu-mgr')?.value;
+  const managerId = mgrVal ? parseInt(mgrVal) : null;
   if (!username || !password) { toast('Username and password required', 'error'); return; }
   if (password.length < 6) { toast('Password must be at least 6 characters', 'error'); return; }
   try {
-    await api('POST', '/users', { username, password, isAdmin });
+    await api('POST', '/users', { username, password, isAdmin, managerId });
     closeModal();
     toast(`User "${username}" created`);
     await loadUsers();
   } catch (e) { toast(e.message, 'error'); }
 }
 
+async function openChangeManager(userId, username, currentManagerId) {
+  const users = await api('GET', '/users') || [];
+  const opts = users
+    .filter(u => u.id !== userId && !u.is_admin)
+    .map(u => `<option value="${u.id}" ${u.id === currentManagerId ? 'selected' : ''}>${esc(u.username)}</option>`)
+    .join('');
+
+  document.getElementById('modal-root').innerHTML = `
+    <div class="modal-overlay" onclick="closeModal(event)">
+      <div class="modal" style="max-width:340px" onclick="event.stopPropagation()">
+        <div class="modal-header">
+          <span class="modal-title">👥 Change Manager — ${esc(username)}</span>
+          <button class="btn-close-modal" onclick="closeModal()">✕</button>
+        </div>
+        <div class="modal-body">
+          <div class="form-group">
+            <label class="form-label">Manager</label>
+            <select class="input" id="mgr-sel">
+              <option value="">None</option>
+              ${opts}
+            </select>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+          <button class="btn btn-primary" onclick="doChangeManager(${userId})">Save</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+async function doChangeManager(userId) {
+  const val = document.getElementById('mgr-sel')?.value;
+  const managerId = val ? parseInt(val) : 0; // 0 = clear
+  try {
+    await api('PATCH', `/users/${userId}`, { managerId });
+    closeModal();
+    toast('Manager updated');
+    await loadUsers();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
 async function deleteUser(id, username) {
-  if (!confirm(`Delete user "${username}"? This will also delete all their workflows.`)) return;
+  if (!confirm(`Delete user "${username}"? Their workflows will survive (owner becomes 'deleted').`)) return;
   try {
     await api('DELETE', `/users/${id}`);
     toast(`User "${username}" deleted`);
@@ -1074,7 +1463,7 @@ async function toggleAdmin(id, currentAdmin) {
   } catch (e) { toast(e.message, 'error'); }
 }
 
-// ── Change own password ───────────────────────────────────────────────────────
+/* ── Change own password ────────────────────────────────────────────────── */
 
 function openChangePassword() {
   document.getElementById('modal-root').innerHTML = `
@@ -1121,7 +1510,7 @@ async function doChangePassword() {
   } catch (e) { toast(e.message, 'error'); }
 }
 
-// ── Admin change any user's password ─────────────────────────────────────────
+/* ── Admin change any user's password ──────────────────────────────────── */
 
 function openAdminChangePassword(userId, username) {
   document.getElementById('modal-root').innerHTML = `

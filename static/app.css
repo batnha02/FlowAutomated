@@ -225,3 +225,25 @@ tr:hover td { background: #f9fafb; }
 .loading { display: flex; align-items: center; justify-content: center; height: 200px; color: #9ca3af; font-size: 14px; gap: 8px; }
 .you-tag { font-size: 11px; color: #9ca3af; margin-left: 4px; }
 .divider-text { text-align: center; font-size: 12px; color: #9ca3af; margin: 4px 0; }
+
+/* ── Settings modal ─────────────────────────────────────────────────────────── */
+.settings-modal { max-width: 640px; }
+.settings-tabs { display: flex; gap: 2px; padding: 0 20px; border-bottom: 1px solid #f3f4f6; background: #f9fafb; }
+.stab { padding: 8px 14px; border: none; background: none; font-size: 12px; font-weight: 500; color: #6b7280; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; transition: all 0.15s; }
+.stab:hover { color: #374151; }
+.stab.active { color: #2563eb; border-bottom-color: #2563eb; }
+
+/* ── Permission table ──────────────────────────────────────────────────────── */
+.perm-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.perm-table th { padding: 6px 8px; text-align: left; color: #6b7280; font-size: 11px; text-transform: uppercase; }
+.perm-table td { padding: 6px 8px; border-top: 1px solid #f3f4f6; }
+.perm-note { font-size: 12px; color: #6b7280; background: #f9fafb; border-radius: 6px; padding: 6px 10px; margin-bottom: 10px; }
+.perm-add-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 10px; padding-top: 10px; border-top: 1px solid #f3f4f6; font-size: 12px; }
+.perm-add-row label { display: flex; gap: 4px; align-items: center; white-space: nowrap; }
+
+/* ── API tab ───────────────────────────────────────────────────────────────── */
+.api-section { display: flex; flex-direction: column; gap: 14px; }
+.code-block { background: #1e293b; color: #7dd3fc; font-family: 'Consolas','Courier New',monospace; font-size: 12px; padding: 10px 14px; border-radius: 8px; word-break: break-all; }
+
+/* ── Badge R/O on community cards ─────────────────────────────────────────── */
+.badge-ro { background: #fef3c7; color: #92400e; border: 1px solid #fde68a; }

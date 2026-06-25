@@ -7,6 +7,12 @@ from typing import Any
 from fastapi import WebSocket
 
 
+class NullWebSocket:
+    """Mock WebSocket that discards all messages (for API/trigger/schedule execution)."""
+    async def send_json(self, data):
+        pass
+
+
 async def _shell(cmd: str) -> None:
     proc = await asyncio.create_subprocess_shell(
         cmd,
@@ -41,7 +47,54 @@ async def _cancellable_sleep(seconds: float, cancel: asyncio.Event) -> bool:
         return False
 
 
-async def execute_workflow(steps: list, ws: WebSocket, cancel: asyncio.Event) -> None:
+async def _fire_triggers(workflow_id: str, step_index: int | None, is_complete: bool):
+    """Fire workflow triggers in background. step_index=None means end-of-workflow."""
+    try:
+        from app.db import get_conn
+        conn = get_conn()
+        if is_complete:
+            rows = conn.execute('''
+                SELECT t.target_workflow_id, w.steps
+                FROM workflow_triggers t
+                JOIN workflows w ON t.target_workflow_id = w.id
+                WHERE t.source_workflow_id=? AND t.trigger_type='on_complete' AND t.is_active=1
+            ''', (workflow_id,)).fetchall()
+        else:
+            rows = conn.execute('''
+                SELECT t.target_workflow_id, w.steps
+                FROM workflow_triggers t
+                JOIN workflows w ON t.target_workflow_id = w.id
+                WHERE t.source_workflow_id=? AND t.trigger_type='on_step'
+                  AND t.trigger_step_index=? AND t.is_active=1
+            ''', (workflow_id, step_index + 1 if step_index is not None else -1)).fetchall()
+        conn.close()
+
+        for r in rows:
+            asyncio.create_task(_run_background(r['target_workflow_id']))
+    except Exception:
+        pass
+
+
+async def _run_background(wf_id: str):
+    """Load workflow from DB and execute it with a NullWebSocket."""
+    import json
+    from app.db import get_conn
+    conn = get_conn()
+    row = conn.execute('SELECT steps FROM workflows WHERE id=?', (wf_id,)).fetchone()
+    conn.close()
+    if not row:
+        return
+    steps = json.loads(row['steps'] or '[]')
+    cancel = asyncio.Event()
+    ws = NullWebSocket()
+    try:
+        await execute_workflow(steps, ws, cancel, workflow_id=wf_id)
+    except Exception:
+        pass
+
+
+async def execute_workflow(steps: list, ws, cancel: asyncio.Event,
+                           workflow_id: str = None) -> None:
     await ws.send_json({'type': 'start', 'total': len(steps)})
     ctx: dict[str, Any] = {}  # browser/page state
 
@@ -58,6 +111,10 @@ async def execute_workflow(steps: list, ws: WebSocket, cancel: asyncio.Event) ->
                 await _run_step(step, ws, ctx, cancel)
                 await ws.send_json({'type': 'step', 'index': i, 'status': 'done'})
                 await ws.send_json({'type': 'log', 'message': '  ✓ Completed'})
+
+                # Fire on_step triggers
+                if workflow_id:
+                    asyncio.create_task(_fire_triggers(workflow_id, i, False))
 
                 delay_ms = int(step.get('delay') or 0)
                 if delay_ms > 0:
@@ -86,8 +143,12 @@ async def execute_workflow(steps: list, ws: WebSocket, cancel: asyncio.Event) ->
     await ws.send_json({'type': 'done', 'total': len(steps)})
     await ws.send_json({'type': 'log', 'message': f'✓ All {len(steps)} steps completed successfully.'})
 
+    # Fire on_complete triggers
+    if workflow_id:
+        asyncio.create_task(_fire_triggers(workflow_id, None, True))
 
-async def _run_step(step: dict, ws: WebSocket, ctx: dict, cancel: asyncio.Event) -> None:
+
+async def _run_step(step: dict, ws, ctx: dict, cancel: asyncio.Event) -> None:
     action = step.get('actionType', '')
     target = (step.get('target') or '').strip()
     value = (step.get('value') or '').strip()
@@ -177,7 +238,6 @@ async def _do_keyboard(window_title: str, text: str, os_name: str) -> None:
         if window_title:
             await _shell(f'xdotool search --name "{window_title}" windowfocus --sync')
             await asyncio.sleep(0.15)
-        # Use exec (not shell) so text is passed as a raw arg — no shell escaping issues
         proc = await asyncio.create_subprocess_exec(
             'xdotool', 'type', '--clearmodifiers', '--delay', '30', '--', text,
             stdout=asyncio.subprocess.PIPE,
@@ -192,8 +252,6 @@ async def _do_keyboard(window_title: str, text: str, os_name: str) -> None:
             f'[Microsoft.VisualBasic.Interaction]::AppActivate("{window_title}")\n'
             f'Start-Sleep -Milliseconds 150\n'
         ) if window_title else ''
-        # Clipboard+paste handles ALL characters. Text is embedded via -EncodedCommand
-        # so no here-string quoting issues even if text contains '@ or other edge cases.
         escaped = text.replace('`', '``').replace('"', '`"').replace('$', '`$')
         await _ps(f"""\
 {focus}Add-Type -AssemblyName System.Windows.Forms
@@ -209,8 +267,6 @@ async def _do_open_app(target: str, os_name: str) -> None:
         raise ValueError('Target (app path/command) required for open_app')
     try:
         if os_name == 'windows':
-            # os.startfile is the standard Windows launcher — handles exe, paths with spaces,
-            # file associations, shortcuts, app names in PATH, all without shell quoting issues
             import os as _os
             _os.startfile(target)
         elif os_name == 'darwin':
@@ -223,7 +279,6 @@ async def _do_open_app(target: str, os_name: str) -> None:
             if proc.returncode != 0:
                 raise RuntimeError(err.decode().strip() or f'Cannot open: {target}')
         else:  # linux
-            # start_new_session=True detaches the child so it outlives the server process
             await asyncio.create_subprocess_shell(
                 target,
                 stdout=asyncio.subprocess.DEVNULL,
@@ -238,9 +293,6 @@ async def _do_open_app(target: str, os_name: str) -> None:
 
 
 def _resolve_selector(target: str) -> tuple[str, str | None]:
-    """Return (selector, warning_msg).
-    If target is a raw HTML snippet, derive a CSS selector from it;
-    otherwise return it unchanged."""
     t = target.strip()
     if not t.startswith('<'):
         return t, None
@@ -248,20 +300,17 @@ def _resolve_selector(target: str) -> tuple[str, str | None]:
     tag_m = re.match(r'<(\w+)', t)
     tag = tag_m.group(1).lower() if tag_m else ''
 
-    # id has highest specificity
     id_m = re.search(r'\bid=["\']([^"\']+)["\']', t)
     if id_m:
         sel = f'#{id_m.group(1)}'
         return sel, f'HTML detected — using selector: {sel}'
 
-    # class list
     cls_m = re.search(r'\bclass=["\']([^"\']+)["\']', t)
     if cls_m:
         classes = '.'.join(cls_m.group(1).split())
         sel = f'{tag}.{classes}' if tag else f'.{classes}'
         return sel, f'HTML detected — using selector: {sel}'
 
-    # inner text fallback
     text_m = re.search(r'>([^<]+)</', t)
     if text_m:
         text = text_m.group(1).strip()
@@ -272,7 +321,7 @@ def _resolve_selector(target: str) -> tuple[str, str | None]:
     return t, 'HTML detected but could not derive a selector — passing as-is'
 
 
-async def _do_browser(action: str, target: str, value: str, ws: WebSocket, ctx: dict) -> None:
+async def _do_browser(action: str, target: str, value: str, ws, ctx: dict) -> None:
     if 'playwright' not in ctx:
         try:
             from playwright.async_api import async_playwright  # type: ignore
@@ -287,7 +336,7 @@ async def _do_browser(action: str, target: str, value: str, ws: WebSocket, ctx: 
         os_name = platform.system().lower()
         launch_kwargs = {'headless': False}
         if os_name == 'windows':
-            launch_kwargs['channel'] = 'msedge'  # Use installed Edge on Windows
+            launch_kwargs['channel'] = 'msedge'
         ctx['browser'] = await ctx['playwright'].chromium.launch(**launch_kwargs)
         ctx['page'] = await ctx['browser'].new_page()
         browser_name = 'Edge' if os_name == 'windows' else 'Chromium'
@@ -323,7 +372,6 @@ async def _do_browser(action: str, target: str, value: str, ws: WebSocket, ctx: 
 # ── New Windows GUI actions ───────────────────────────────────────────────────
 
 def _hotkey_to_sendkeys(keys: str) -> str:
-    """Convert 'ctrl+shift+s' → '^+s' for Windows SendKeys."""
     modifier_map = {'ctrl': '^', 'control': '^', 'alt': '%', 'shift': '+'}
     special_map = {
         'f1': '{F1}', 'f2': '{F2}', 'f3': '{F3}', 'f4': '{F4}',

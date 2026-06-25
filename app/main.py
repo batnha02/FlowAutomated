@@ -1,15 +1,19 @@
 import asyncio
+import json
 from pathlib import Path
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query, Depends, HTTPException
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.db import init_db
+from app.db import init_db, get_conn, get_user_perms
 from app.auth import decode_token, get_current_user
-from app.executor import execute_workflow, get_cursor_position
+from app.executor import execute_workflow, get_cursor_position, NullWebSocket
 from app.routes.auth import router as auth_router
 from app.routes.users import router as users_router
 from app.routes.workflows import router as workflows_router
+from app.routes.permissions import router as perms_router
+from app.routes.triggers import router as triggers_router
+from app.routes.schedules import router as schedules_router
 
 STATIC = Path(__file__).parent.parent / 'static'
 
@@ -26,6 +30,15 @@ app.include_router(auth_router, prefix='/api/auth')
 app.include_router(users_router, prefix='/api/users')
 app.include_router(workflows_router, prefix='/api/workflows')
 
+# Permission/trigger/schedule routes need wf_id injected as path param
+# We use a wrapper router approach with path prefix pattern
+app.include_router(perms_router, prefix='/api/workflows/{wf_id}/permissions',
+                   tags=['permissions'])
+app.include_router(triggers_router, prefix='/api/workflows/{wf_id}/triggers',
+                   tags=['triggers'])
+app.include_router(schedules_router, prefix='/api/workflows/{wf_id}/schedule',
+                   tags=['schedules'])
+
 
 @app.get('/health')
 def health():
@@ -40,6 +53,46 @@ async def pick_coordinate(user: dict = Depends(get_current_user)):
         return {'x': x, 'y': y}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── API run endpoint ──────────────────────────────────────────────────────────
+
+@app.post('/api/run/{wf_id}')
+async def api_run(wf_id: str, api_key: str = Query(...)):
+    """Execute a workflow via API key (no auth token required)."""
+    conn = get_conn()
+    row = conn.execute(
+        'SELECT * FROM workflows WHERE id=? AND api_key=?', (wf_id, api_key)
+    ).fetchone()
+    conn.close()
+
+    if not row:
+        raise HTTPException(status_code=404, detail='Workflow not found or invalid API key')
+
+    steps = json.loads(row['steps'] or '[]')
+    cancel = asyncio.Event()
+    ws = NullWebSocket()
+    last_error = []
+
+    # Wrap NullWebSocket to capture errors
+    class CapturingWS:
+        async def send_json(self, data):
+            if data.get('type') == 'error':
+                last_error.append(data.get('error', 'Unknown error'))
+
+    try:
+        await asyncio.wait_for(
+            execute_workflow(steps, CapturingWS(), cancel, workflow_id=wf_id),
+            timeout=300.0  # 5 minutes
+        )
+    except asyncio.TimeoutError:
+        return {'success': False, 'error': 'Execution timed out (5 minutes)'}
+    except Exception as e:
+        return {'success': False, 'error': str(e)}
+
+    if last_error:
+        return {'success': False, 'error': last_error[-1]}
+    return {'success': True, 'error': None}
 
 
 # ── Static files ──────────────────────────────────────────────────────────────
@@ -91,7 +144,8 @@ async def ws_endpoint(ws: WebSocket, token: str = Query(None)):
                         pass
                     cancel.clear()
                 exec_task = asyncio.create_task(
-                    execute_workflow(data.get('steps', []), ws, cancel)
+                    execute_workflow(data.get('steps', []), ws, cancel,
+                                     workflow_id=data.get('workflowId'))
                 )
 
             elif msg_type == 'cancel':
@@ -121,3 +175,7 @@ def serve_spa(full_path: str):
 @app.on_event('startup')
 def on_startup():
     init_db()
+    # Start background scheduler
+    from app.scheduler import start_scheduler, set_event_loop
+    set_event_loop(asyncio.get_event_loop())
+    start_scheduler()
