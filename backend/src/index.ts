@@ -10,6 +10,8 @@ import { JWT_SECRET } from './middleware/auth';
 import authRoutes from './routes/auth';
 import userRoutes from './routes/users';
 import workflowRoutes from './routes/workflows';
+import issueRoutes from './routes/issues';
+import agentRoutes from './routes/agent';
 import { WorkflowExecutor } from './executor';
 import { JwtPayload, Step } from './types';
 
@@ -26,6 +28,11 @@ app.use(express.json({ limit: '10mb' }));
 app.use('/api/auth', authRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/workflows', workflowRoutes);
+app.use('/api/issues', issueRoutes);
+app.use('/api/agent', agentRoutes);
+
+// Serve uploaded files
+app.use('/uploads', express.static(path.join(process.cwd(), 'uploads')));
 
 app.get('/health', (_req, res) => res.json({ ok: true }));
 

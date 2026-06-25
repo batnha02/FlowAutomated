@@ -5,6 +5,7 @@ import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import WorkflowEditor from './pages/WorkflowEditor';
 import Admin from './pages/Admin';
+import QnA from './pages/QnA';
 import Layout from './components/Layout';
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
@@ -30,6 +31,7 @@ export default function App() {
           <Route path="/dashboard" element={<Dashboard />} />
           <Route path="/workflow/new" element={<WorkflowEditor />} />
           <Route path="/workflow/:id" element={<WorkflowEditor />} />
+          <Route path="/qna" element={<QnA />} />
           <Route
             path="/admin"
             element={<RequireAdmin><Admin /></RequireAdmin>}

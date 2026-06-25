@@ -1,6 +1,6 @@
 import { Outlet, NavLink, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../store/auth';
-import { LayoutDashboard, Zap, Shield, LogOut, PlusCircle } from 'lucide-react';
+import { LayoutDashboard, Zap, Shield, LogOut, PlusCircle, MessageSquarePlus } from 'lucide-react';
 
 export default function Layout() {
   const { user, logout } = useAuthStore();
@@ -47,6 +47,10 @@ export default function Layout() {
             <PlusCircle size={16} />
             New Workflow
           </button>
+          <NavLink to="/qna" className={navClass}>
+            <MessageSquarePlus size={16} />
+            Q&amp;A
+          </NavLink>
           {user?.isAdmin && (
             <NavLink to="/admin" className={navClass}>
               <Shield size={16} />

@@ -28,6 +28,18 @@ db.exec(`
     updated_at TEXT NOT NULL DEFAULT (datetime('now')),
     FOREIGN KEY (owner_id) REFERENCES users(id) ON DELETE CASCADE
   );
+
+  CREATE TABLE IF NOT EXISTS issues (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    description TEXT NOT NULL,
+    type TEXT NOT NULL DEFAULT 'question',
+    images TEXT NOT NULL DEFAULT '[]',
+    user_id INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'open',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  );
 `);
 
 const adminExists = db.prepare('SELECT id FROM users WHERE username = ?').get('admin') as any;
