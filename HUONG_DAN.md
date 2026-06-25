@@ -1,559 +1,461 @@
-# Tài liệu hướng dẫn sử dụng AutoStep
+# Hướng dẫn sử dụng AutoStep
 
 ## Mục lục
-1. [Giới thiệu](#1-giới-thiệu)
-2. [Kiến trúc hệ thống](#2-kiến-trúc-hệ-thống)
-3. [Cài đặt và khởi động](#3-cài-đặt-và-khởi-động)
-4. [Đăng nhập](#4-đăng-nhập)
-5. [Quản lý Workflow](#5-quản-lý-workflow)
-6. [Các loại Action](#6-các-loại-action)
-7. [Thực thi Workflow](#7-thực-thi-workflow)
-8. [Local Agent](#8-local-agent)
-9. [Triggers – Kích hoạt chuỗi Workflow](#9-triggers--kích-hoạt-chuỗi-workflow)
-10. [Lịch chạy tự động (Schedule)](#10-lịch-chạy-tự-động-schedule)
-11. [Phân quyền (Permissions)](#11-phân-quyền-permissions)
-12. [API Key – Chạy qua HTTP](#12-api-key--chạy-qua-http)
-13. [Quản trị người dùng (Admin)](#13-quản-trị-người-dùng-admin)
-14. [Bảo mật](#14-bảo-mật)
-15. [Tham chiếu API REST](#15-tham-chiếu-api-rest)
+
+1. [Tại sao dùng AutoStep?](#1-tại-sao-dùng-autostep)
+2. [Tạo workflow đầu tiên](#2-tạo-workflow-đầu-tiên)
+3. [Các loại thao tác (Action)](#3-các-loại-thao-tác-action)
+4. [Chia sẻ workflow trong team](#4-chia-sẻ-workflow-trong-team)
+5. [Kết nối các workflow với nhau](#5-kết-nối-các-workflow-với-nhau)
+6. [Lập lịch chạy tự động](#6-lập-lịch-chạy-tự-động)
+7. [Kích hoạt qua API](#7-kích-hoạt-qua-api)
+8. [Quản lý người dùng (Admin)](#8-quản-lý-người-dùng-admin)
+9. [Tham chiếu API REST](#9-tham-chiếu-api-rest)
 
 ---
 
-## 1. Giới thiệu
+## 1. Tại sao dùng AutoStep?
 
-**AutoStep** là hệ thống tự động hóa thao tác máy tính dạng web. Người dùng xây dựng các **Workflow** gồm nhiều **Step** (bước), mỗi bước thực hiện một thao tác như:
+Trong công việc hàng ngày, nhiều tác vụ được làm đi làm lại theo đúng một quy trình: mở ứng dụng, điền form, click nút xác nhận, gửi báo cáo... AutoStep được xây dựng để **biến những quy trình đó thành tự động**.
 
-- Click chuột / gõ phím lên màn hình desktop
-- Mở / đóng ứng dụng
-- Điều khiển trình duyệt web (Playwright)
-- Chờ một khoảng thời gian (Delay)
-
-Workflow được lưu tập trung trên server, nhiều người dùng có thể xem, chạy, hoặc chỉnh sửa theo phân quyền. Hệ thống hỗ trợ cả chạy ngay trên server lẫn chạy trên máy PC cục bộ qua **Local Agent**.
-
----
-
-## 2. Kiến trúc hệ thống
+**Tầm nhìn:**
+Mỗi team tự xây dựng bộ workflow riêng cho công việc của mình. Khi một team hoàn thành công việc, workflow tự động thông báo cho team tiếp theo — không cần email, không cần nhắc nhở thủ công.
 
 ```
-┌─────────────────────────────────────────────┐
-│              Trình duyệt người dùng          │
-│         (React + Tailwind CSS + Vite)        │
-└───────────────────┬─────────────────────────┘
-                    │ HTTP / WebSocket
-┌───────────────────▼─────────────────────────┐
-│          Backend Server (FastAPI)            │
-│  ┌────────────┐  ┌──────────────────────┐   │
-│  │  REST API  │  │   WebSocket /ws      │   │
-│  │  /api/...  │  │  (thực thi workflow) │   │
-│  └────────────┘  └──────────────────────┘   │
-│  ┌───────────────────────────────────────┐  │
-│  │  Executor (executor.py)               │  │
-│  │  Scheduler (scheduler.py)             │  │
-│  └───────────────────────────────────────┘  │
-│  ┌───────────────────────────────────────┐  │
-│  │  SQLite Database (automation.db)      │  │
-│  └───────────────────────────────────────┘  │
-└─────────────────────────────────────────────┘
-                    │ WebSocket (tùy chọn)
-┌───────────────────▼─────────────────────────┐
-│     Local Agent (agent.py) – máy PC riêng   │
-│  Chạy actions trực tiếp trên màn hình PC    │
-└─────────────────────────────────────────────┘
+Team Kế toán                Team IT                  Team Báo cáo
+──────────────              ──────────────           ──────────────
+Xuất dữ liệu  ──trigger──►  Chuyển đổi   ──trigger──► Gửi email
+(9:00 hàng ngày)            (tự động)                 (tự động)
 ```
 
-**Thành phần chính:**
-
-| Thành phần | Công nghệ | Vai trò |
-|---|---|---|
-| `app/main.py` | FastAPI | Khởi động server, khai báo routes, WebSocket |
-| `app/executor.py` | asyncio | Thực thi từng step của workflow |
-| `app/scheduler.py` | threading | Kiểm tra và kích hoạt lịch chạy mỗi 60 giây |
-| `app/db.py` | SQLite | Khởi tạo & truy vấn CSDL |
-| `app/auth.py` | JWT + bcrypt | Xác thực người dùng |
-| `agent.py` | FastAPI | Agent cục bộ trên máy PC |
-| `frontend/` | React + TypeScript | Giao diện web |
+Kết quả: một chuỗi 3 bước thủ công → **1 nút bấm** hoặc **hoàn toàn tự động theo lịch**.
 
 ---
 
-## 3. Cài đặt và khởi động
+## 2. Tạo workflow đầu tiên
 
-### 3.1 Yêu cầu
+### 2.1 Đăng nhập
 
-- Python 3.11+
-- Node.js 18+ (chỉ cần nếu build lại frontend)
-- Linux: cài `xdotool` để điều khiển chuột/bàn phím
+Truy cập `http://<địa-chỉ-server>:8000` và đăng nhập bằng tài khoản của bạn.
 
+> Tài khoản mặc định: `admin` / `123456` — đổi ngay sau lần đăng nhập đầu tiên qua menu người dùng → **Change Password**.
+
+### 2.2 Tạo workflow mới
+
+1. Trên trang **Dashboard**, nhấn **New Workflow** (góc phải)
+2. Nhập tên workflow vào ô tiêu đề (ví dụ: `Gửi báo cáo tuần`)
+3. Thêm mô tả ngắn bên dưới tiêu đề (tùy chọn)
+
+### 2.3 Thêm step đầu tiên
+
+Nhấn **Add Step** → dialog hiện ra:
+
+| Trường | Bắt buộc | Mô tả |
+|--------|----------|-------|
+| **Step Name** | Có | Tên mô tả bước này làm gì, ví dụ: `Mở Chrome` |
+| **Action Type** | Có | Loại thao tác (xem mục 3) |
+| **Target** | Tùy action | Đối tượng bị tác động (tọa độ, selector, URL...) |
+| **Value** | Tùy action | Nội dung nhập vào (văn bản, thời gian...) |
+| **Delay after step** | Không | Chờ thêm (ms) trước khi sang step tiếp theo |
+
+Nhấn **Save Step** để thêm vào danh sách.
+
+### 2.4 Sắp xếp và chỉnh sửa steps
+
+- Dùng mũi tên ▲▼ để đổi thứ tự
+- Nhấn biểu tượng bút ✏ để sửa step
+- Nhấn biểu tượng thùng rác để xóa
+
+### 2.5 Lưu workflow
+
+Nhấn **Save** → chọn chế độ hiển thị:
+
+| Chế độ | Ai thấy được |
+|--------|-------------|
+| **Private** | Chỉ bạn (và manager của bạn) |
+| **Public** | Tất cả thành viên đã đăng nhập có thể xem và chạy |
+
+### 2.6 Chạy thử
+
+Nhấn **Run** (nút xanh). Panel log xuất hiện bên phải, hiển thị tiến trình từng bước:
+
+- **Vòng tròn xám** — chưa chạy
+- **Vòng tròn vàng nhấp nháy** — đang thực thi
+- **✓ Xanh lá** — thành công
+- **✗ Đỏ** — thất bại (kèm thông báo lỗi)
+
+Nhấn **Stop** để dừng giữa chừng.
+
+### 2.7 Export / Import
+
+- **Export:** Nhấn **Export** để tải về file `.json` — dùng để backup hoặc chia sẻ
+- **Import:** Nhấn **Open** để tải file `.json` lên và tạo bản sao workflow
+
+---
+
+## 3. Các loại thao tác (Action)
+
+### Nhóm Windows GUI — điều khiển màn hình desktop
+
+| Action | Cần điền | Ví dụ |
+|--------|----------|-------|
+| **Left Click** | Tọa độ `x,y` | `500,300` |
+| **Right Click** | Tọa độ `x,y` | `500,300` |
+| **Double Click** | Tọa độ `x,y` | `500,300` |
+| **Keyboard Input** | (Target) tiêu đề cửa sổ; (Value) văn bản | Target: `Notepad`, Value: `Hello` |
+| **Open App** | Đường dẫn hoặc lệnh | `/usr/bin/gedit`, `notepad.exe` |
+| **Hot Key** | Tổ hợp phím | `ctrl+s`, `alt+f4`, `ctrl+v` |
+| **Close App** | Tên app / tiêu đề cửa sổ | `Notepad` |
+| **Move Window** | Tọa độ `x,y`; (Value) tiêu đề cửa sổ | `100,100` |
+
+**Cách lấy tọa độ chuột trên Linux:**
 ```bash
-# Linux
-sudo apt install xdotool
+xdotool getmouselocation
 ```
 
-### 3.2 Cài đặt thư viện Python
+### Nhóm Browser — điều khiển trình duyệt (Playwright)
 
-```bash
-cd /home/ks/Thanh/AutomatedStep
-
-# Tạo môi trường ảo (nếu chưa có)
-python3 -m venv venv
-source venv/bin/activate
-
-# Cài thư viện
-pip install -r requirements.txt
-
-# Cài Playwright và trình duyệt (cho browser actions)
-python -m playwright install chromium
-```
-
-### 3.3 Khởi động server
-
-```bash
-cd /home/ks/Thanh/AutomatedStep
-source venv/bin/activate
-
-uvicorn app.main:app --host 0.0.0.0 --port 8000
-```
-
-Truy cập giao diện web tại: `http://<địa-chỉ-server>:8000`
-
-### 3.4 Biến môi trường
-
-| Biến | Mặc định | Ý nghĩa |
-|---|---|---|
-| `JWT_SECRET` | `auto-step-secret-key-2024-autostep!!` | Khóa bí mật ký JWT token |
-
-> **Lưu ý bảo mật:** Thay đổi `JWT_SECRET` trong môi trường production.
-
----
-
-## 4. Đăng nhập
-
-Khi server khởi động lần đầu, hệ thống tự tạo tài khoản quản trị mặc định:
-
-| Trường | Giá trị |
-|---|---|
-| Tên đăng nhập | `admin` |
-| Mật khẩu | `123456` |
-
-> **Bắt buộc:** Đổi mật khẩu admin sau lần đăng nhập đầu tiên.
-
-**Các bước đăng nhập:**
-1. Mở trình duyệt, truy cập `http://<server>:8000`
-2. Nhập tên đăng nhập và mật khẩu
-3. Nhấn **Login**
-
-Token xác thực có hiệu lực **7 ngày**. Sau khi hết hạn, người dùng cần đăng nhập lại.
-
-**Đổi mật khẩu:**
-- Vào menu người dùng (góc phải) → **Change Password**
-- Nhập mật khẩu hiện tại và mật khẩu mới (tối thiểu 6 ký tự)
-
----
-
-## 5. Quản lý Workflow
-
-### 5.1 Dashboard
-
-Màn hình chính hiển thị danh sách các workflow mà bạn có quyền xem, bao gồm:
-- Workflow bạn tạo
-- Workflow được chia sẻ với bạn
-- Workflow công khai (Public)
-
-### 5.2 Tạo Workflow mới
-
-1. Nhấn nút **New Workflow** trên Dashboard
-2. Đặt **tên** và **mô tả** cho workflow
-3. Thêm các Step (xem mục 6)
-4. Nhấn **Save** → chọn chế độ công khai/riêng tư → xác nhận
-
-### 5.3 Chỉnh sửa Workflow
-
-1. Từ Dashboard, nhấn vào workflow cần sửa
-2. Chỉnh sửa tên, mô tả, thêm/sửa/xóa/sắp xếp lại các Step
-3. Nhấn **Save** để lưu thay đổi
-
-> Chỉ chủ sở hữu (owner) hoặc người có quyền `Edit` mới thấy các nút chỉnh sửa.
-
-### 5.4 Export / Import Workflow
-
-- **Export:** Nhấn nút **Export** trên thanh công cụ → tải file `.json`
-- **Import:** Nhấn **Open** → chọn file `.json` đã export
-
-File JSON có cấu trúc:
-```json
-{
-  "name": "Tên workflow",
-  "description": "Mô tả",
-  "steps": [...]
-}
-```
-
-### 5.5 Xóa Workflow
-
-Từ Dashboard, nhấn biểu tượng xóa bên cạnh workflow (cần quyền `Delete`).
-
----
-
-## 6. Các loại Action
-
-Mỗi **Step** trong workflow thực hiện một **Action**. Có 3 nhóm action:
-
-### Nhóm Windows GUI (điều khiển màn hình desktop)
-
-| Action | Trường Target | Trường Value | Mô tả |
-|---|---|---|---|
-| **Left Click** | Tọa độ `x,y` (vd: `500,300`) | – | Click trái chuột |
-| **Right Click** | Tọa độ `x,y` | – | Click phải chuột |
-| **Double Click** | Tọa độ `x,y` | – | Double click |
-| **Keyboard Input** | Tiêu đề cửa sổ (tùy chọn) | Văn bản cần gõ | Gõ văn bản vào cửa sổ |
-| **Open App** | Đường dẫn / lệnh mở app | – | Mở ứng dụng (vd: `/usr/bin/gedit`, `notepad.exe`) |
-| **Hot Key** | Tổ hợp phím (vd: `ctrl+c`) | Tiêu đề cửa sổ (tùy chọn) | Gửi phím tắt |
-| **Close App** | Tên app / tiêu đề cửa sổ | – | Đóng ứng dụng |
-| **Move Window** | Tọa độ `x,y` | Tiêu đề cửa sổ (tùy chọn) | Di chuyển cửa sổ |
-
-**Cách lấy tọa độ chuột (Linux):**
-- Trong giao diện editor, nhấn nút **Pick Coordinate** (nếu có)
-- Hoặc chạy lệnh: `xdotool getmouselocation`
-
-**Tổ hợp phím Hot Key hỗ trợ:**
-```
-ctrl+c    ctrl+v    ctrl+z    ctrl+s    ctrl+a
-alt+f4    ctrl+alt+t
-f1..f12   enter    esc    tab    delete    backspace
-home    end    space    up    down    left    right
-```
-
-### Nhóm Browser (Playwright – điều khiển trình duyệt)
-
-| Action | Trường Target | Trường Value | Mô tả |
-|---|---|---|---|
-| **Browser: Navigate** | URL (vd: `https://example.com`) | – | Mở trang web |
-| **Browser: Click** | CSS selector / XPath | – | Click vào phần tử |
-| **Browser: Type** | CSS selector / XPath | Văn bản cần điền | Điền văn bản vào ô input |
-| **Browser: Wait Element** | CSS selector / XPath | Timeout (ms), mặc định 5000 | Chờ phần tử xuất hiện |
-| **Browser: Screenshot** | Đường dẫn lưu file (vd: `/home/user/sc.png`) | – | Chụp màn hình toàn trang |
+| Action | Target | Value |
+|--------|--------|-------|
+| **Browser: Navigate** | URL đầy đủ | — |
+| **Browser: Click** | CSS selector hoặc XPath | — |
+| **Browser: Type** | CSS selector hoặc XPath | Văn bản cần điền |
+| **Browser: Wait Element** | CSS selector hoặc XPath | Timeout (ms), mặc định 5000 |
+| **Browser: Screenshot** | Đường dẫn lưu file | — |
 
 **Cú pháp selector:**
 
-| Loại | Ví dụ |
-|---|---|
-| CSS ID | `#submit-btn` |
-| CSS class | `.btn-primary` |
-| CSS kết hợp | `form.login input[name="user"]` |
-| Text | `text=Đăng nhập` |
-| XPath | `//button[@id="ok"]` |
-
-> **Lưu ý:** Khi chạy browser actions trên Linux, hệ thống dùng **Chromium**. Trên Windows dùng **Microsoft Edge**.
+```
+#submit-btn          → phần tử có id="submit-btn"
+.btn-primary         → phần tử có class="btn-primary"
+text=Đăng nhập       → phần tử chứa text "Đăng nhập"
+//button[@id="ok"]   → XPath
+```
 
 ### Nhóm Utility
 
-| Action | Trường Value | Mô tả |
-|---|---|---|
-| **Delay** | Thời gian (ms), vd: `1000` | Dừng lại một khoảng thời gian |
+| Action | Value | Mô tả |
+|--------|-------|-------|
+| **Delay** | Thời gian (ms) | Dừng lại, ví dụ `2000` = chờ 2 giây |
 
-### Trường "Delay after step"
-
-Ngoài action `Delay`, mỗi step còn có trường **"Delay after step (ms)"** – chờ thêm sau khi step hoàn thành trước khi chuyển sang step tiếp theo.
-
----
-
-## 7. Thực thi Workflow
-
-### 7.1 Chạy thủ công từ giao diện
-
-1. Mở workflow cần chạy
-2. Nhấn nút **Run** (màu xanh lá)
-3. Màn hình log bên phải hiển thị tiến trình thực thi
-4. Trạng thái từng step:
-   - **Vòng tròn xám** – chờ
-   - **Vòng tròn vàng** (nhấp nháy) – đang chạy
-   - **✓ Xanh lá** – thành công
-   - **✗ Đỏ** – thất bại
-
-### 7.2 Dừng giữa chừng
-
-Nhấn nút **Stop** (màu đỏ) trong lúc workflow đang chạy.
-
-### 7.3 Thứ tự thực thi
-
-Các step chạy tuần tự từ trên xuống dưới. Nếu một step thất bại, workflow dừng lại tại đó và báo lỗi.
-
-### 7.4 Chạy qua URL
-
-Thêm tham số `?run=1` vào URL của workflow để tự động chạy ngay khi tải trang:
-```
-http://<server>:8000/workflow/<workflow-id>?run=1
-```
+**Lưu ý về "Delay after step":**
+Ngoài action `Delay` độc lập, mỗi step đều có trường **"Delay after step (ms)"** — đây là thời gian chờ sau khi step hoàn thành, trước khi bắt đầu step kế tiếp. Dùng để trang web hoặc ứng dụng kịp tải.
 
 ---
 
-## 8. Local Agent
+## 4. Chia sẻ workflow trong team
 
-**Local Agent** cho phép thực thi workflow trực tiếp trên máy PC của bạn thay vì trên server.
+### Tại sao cần phân quyền?
 
-### Khi nào dùng Local Agent?
-
-- Các action click chuột, gõ phím cần hiển thị trực tiếp trên màn hình máy bạn
-- Server là máy Linux headless (không có màn hình), nhưng bạn muốn tự động hóa trên máy Windows/Linux có màn hình
-
-### Cách chạy Local Agent
-
-Trên máy PC của bạn (cần có Python + cài đặt thư viện):
-
-```bash
-cd /home/ks/Thanh/AutomatedStep
-source venv/bin/activate
-
-# Chạy với port mặc định 8001
-python agent.py
-
-# Hoặc chỉ định port khác
-python agent.py --port 9001
-```
-
-Khi agent khởi động thành công:
-```
-════════════════════════════════════════════════════
-  AutoStep Local Agent
-════════════════════════════════════════════════════
-  WebSocket : ws://localhost:8001/ws
-  Health    : http://localhost:8001/health
-
-  Mọi step sẽ chạy trực tiếp trên máy này.
-  Mở AutoStep web app → bật "🖥 Local PC" → nhấn Run.
-════════════════════════════════════════════════════
-```
-
-### Kết nối từ web app
-
-Trong giao diện editor, bật chế độ **"Local PC"** trước khi nhấn Run. Web app sẽ kết nối WebSocket tới `ws://localhost:8001/ws` thay vì gửi lên server.
-
----
-
-## 9. Triggers – Kích hoạt chuỗi Workflow
-
-**Trigger** cho phép một workflow kích hoạt workflow khác chạy tự động.
-
-### Các loại trigger
-
-| Loại | Khi nào kích hoạt |
-|---|---|
-| `on_complete` | Khi workflow nguồn hoàn thành toàn bộ |
-| `on_step` | Khi workflow nguồn hoàn thành một step cụ thể |
-
-### Cách thiết lập Trigger
-
-1. Mở workflow cần nhận trigger (workflow đích)
-2. Vào tab **Triggers**
-3. Nhấn **Add Trigger**
-4. Chọn:
-   - **Source Workflow**: Workflow sẽ kích hoạt workflow này
-   - **Trigger Type**: `on_complete` hoặc `on_step`
-   - **Step Index** (nếu chọn `on_step`): bước thứ mấy (tính từ 1)
-5. Nhấn **Save**
-
-**Ví dụ:**
-- Workflow A hoàn thành → tự động kích hoạt Workflow B → Workflow B hoàn thành → kích hoạt Workflow C
-
-### Lưu ý
-
-- Trigger chạy **bất đồng bộ** (non-blocking) – không ảnh hưởng đến workflow đang chạy
-- Khi workflow nguồn bị xóa, trigger liên quan tự động bị xóa theo
-
----
-
-## 10. Lịch chạy tự động (Schedule)
-
-Mỗi workflow có thể được lên lịch chạy tự động theo thời gian.
-
-### Cấu hình Schedule
-
-1. Mở workflow cần lên lịch
-2. Vào tab **Schedule**
-3. Điền thông tin:
-
-| Trường | Mô tả | Ví dụ |
-|---|---|---|
-| **Time of Day** | Giờ chạy (HH:MM, 24h) | `09:00`, `14:30` |
-| **Days of Week** | Các ngày trong tuần (0=T2, 6=CN) | `[0,1,2,3,4]` = Thứ 2–6 |
-| **Days of Month** | Các ngày trong tháng | `[1,15]` = ngày 1 và 15 |
-| **Active** | Bật/tắt lịch | ✓ |
-
-4. Nhấn **Save**
-
-### Logic kích hoạt
-
-- Hệ thống kiểm tra mỗi **60 giây**
-- Nếu `Days of Week` không rỗng: chỉ chạy vào các ngày trong tuần được chỉ định
-- Nếu `Days of Month` không rỗng: chỉ chạy vào các ngày trong tháng được chỉ định
-- Nếu cả hai đều rỗng: chạy mỗi ngày vào giờ được cài đặt
-- Trường `last_run` ghi lại lần chạy gần nhất
-
-**Ví dụ:** Chạy lúc 08:00 mỗi thứ Hai và thứ Tư:
-- Time of Day: `08:00`
-- Days of Week: `[0, 2]`
-
----
-
-## 11. Phân quyền (Permissions)
+Mỗi team có workflow của riêng mình. Một số workflow nhạy cảm (ví dụ: tự động thanh toán) không nên cho tất cả mọi người chạy. Phân quyền giúp kiểm soát điều đó.
 
 ### Các mức quyền
 
 | Quyền | Ý nghĩa |
-|---|---|
-| **canView** | Xem workflow và danh sách steps |
+|-------|---------|
+| **canView** | Thấy workflow và danh sách steps |
 | **canRun** | Chạy workflow |
 | **canEdit** | Sửa steps, lên lịch, thiết lập trigger |
 | **canDelete** | Xóa workflow |
 
-### Quyền mặc định
+### Ai tự động có quyền gì?
 
-- **Admin**: tự động có đầy đủ 4 quyền trên mọi workflow
-- **Người tạo workflow**: tự động có đầy đủ 4 quyền
-- **Manager của người tạo**: tự động được cấp đầy đủ 4 quyền
-- **Workflow Public**: mọi người dùng đã đăng nhập có `canView` và `canRun`
+| Đối tượng | Quyền tự động |
+|-----------|--------------|
+| Người tạo workflow | Toàn quyền (View + Run + Edit + Delete) |
+| Manager của người tạo (và toàn bộ chuỗi manager lên trên) | Toàn quyền |
+| Admin | Toàn quyền trên tất cả workflow |
+| Workflow Public | Mọi user đã đăng nhập: View + Run |
 
-### Cấp quyền cho người dùng
+### Chia sẻ qua chế độ Public/Private
 
-1. Mở workflow
-2. Vào tab **Permissions**
-3. Chọn người dùng và đánh dấu các quyền
-4. Nhấn **Save**
+Cách đơn giản nhất: khi lưu workflow, chọn **Public** để toàn bộ team có thể thấy và chạy. Chọn **Private** nếu chỉ dành cho bạn và team trực tiếp.
 
-### Chế độ Public/Private
+### Cấp quyền chi tiết cho từng người (qua API)
 
-- **Private**: chỉ người có quyền `canView` mới thấy
-- **Public**: mọi người dùng đều thấy và chạy được (nhưng không tự động có quyền sửa/xóa)
+Để kiểm soát tinh hơn — ví dụ: cho user A chỉ được **Run** chứ không được **Edit**:
+
+```bash
+# Cấp quyền canRun cho user có id=5 trên workflow <wf-id>
+curl -X POST "http://<server>:8000/api/workflows/<wf-id>/permissions" \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"userId": 5, "canView": true, "canRun": true, "canEdit": false, "canDelete": false}'
+```
+
+### Cấu trúc Manager — Quyền thừa hưởng
+
+Khi Admin tạo user, có thể chỉ định **Manager** (cấp trên trực tiếp).
+
+```
+Admin
+ └── Manager A (trưởng phòng)
+      ├── Nhân viên 1  → tạo workflow → Manager A tự động có toàn quyền
+      └── Nhân viên 2  → tạo workflow → Manager A tự động có toàn quyền
+```
+
+Điều này đảm bảo trưởng phòng luôn có thể xem và kiểm soát workflow của nhân viên trong nhóm.
 
 ---
 
-## 12. API Key – Chạy qua HTTP
+## 5. Kết nối các workflow với nhau
 
-Mỗi workflow có một **API Key** dùng để kích hoạt chạy qua HTTP mà không cần đăng nhập.
+Đây là tính năng cốt lõi để xây dựng **chuỗi tự động hóa liên team**.
 
-### Lấy API Key
+### Trigger là gì?
 
-Vào tab **Permissions** (hoặc thông tin workflow) → copy API Key.
+Trigger cho phép workflow B **tự động chạy** ngay khi workflow A đạt một trạng thái nhất định — không cần ai nhấn nút.
 
-### Gọi API
+### Các loại trigger
+
+| Loại | Khi nào B được kích hoạt |
+|------|--------------------------|
+| `on_complete` | Khi A hoàn thành **toàn bộ** |
+| `on_step` | Khi A hoàn thành **một step cụ thể** |
+
+### Ví dụ thực tế
+
+**Tình huống:** Team Kế toán xuất báo cáo xong → Team IT tự động xử lý file → Team Giám đốc tự động nhận email tổng hợp.
+
+```
+Workflow A (Kế toán): Xuất báo cáo tháng
+     ↓ on_complete
+Workflow B (IT): Xử lý & chuyển định dạng file
+     ↓ on_complete
+Workflow C (Admin): Gửi email tổng hợp lên ban lãnh đạo
+```
+
+**Kết quả:** Kế toán chỉ cần chạy Workflow A — hai bước còn lại tự động diễn ra.
+
+### Thiết lập trigger (qua API)
+
+Trigger được cấu hình trên **workflow đích** (workflow sẽ bị kích hoạt):
 
 ```bash
-curl -X POST "http://<server>:8000/api/run/<workflow-id>?api_key=<api-key>"
+# Workflow B sẽ tự chạy khi Workflow A (source_workflow_id) hoàn thành
+curl -X POST "http://<server>:8000/api/workflows/<wf-B-id>/triggers" \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "sourceWorkflowId": "<wf-A-id>",
+    "triggerType": "on_complete"
+  }'
+
+# Hoặc khi Workflow A hoàn thành step số 3
+curl -X POST "http://<server>:8000/api/workflows/<wf-B-id>/triggers" \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "sourceWorkflowId": "<wf-A-id>",
+    "triggerType": "on_step",
+    "stepIndex": 3
+  }'
 ```
 
-**Phản hồi thành công:**
+### Xem danh sách trigger của một workflow
+
+```bash
+curl "http://<server>:8000/api/workflows/<wf-id>/triggers" \
+  -H "Authorization: Bearer <token>"
+```
+
+### Xóa trigger
+
+```bash
+curl -X DELETE "http://<server>:8000/api/workflows/<wf-id>/triggers/<trigger-id>" \
+  -H "Authorization: Bearer <token>"
+```
+
+### Lưu ý quan trọng
+
+- Trigger chạy **bất đồng bộ** — workflow A không chờ B hoàn thành mới kết thúc
+- Có thể tạo **chuỗi trigger dài** bao nhiêu bước tùy ý
+- Khi workflow A bị xóa, tất cả trigger có nguồn từ A cũng bị xóa
+
+---
+
+## 6. Lập lịch chạy tự động
+
+Thay vì ai đó nhấn Run mỗi ngày, workflow có thể **tự chạy theo lịch**.
+
+### Cấu hình lịch (qua API)
+
+```bash
+curl -X PUT "http://<server>:8000/api/workflows/<wf-id>/schedule" \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "timeOfDay": "08:00",
+    "daysOfWeek": [0, 1, 2, 3, 4],
+    "daysOfMonth": [],
+    "active": true
+  }'
+```
+
+### Các trường cấu hình
+
+| Trường | Mô tả | Ví dụ |
+|--------|-------|-------|
+| `timeOfDay` | Giờ chạy (HH:MM, 24h) | `"09:00"`, `"14:30"` |
+| `daysOfWeek` | Các ngày trong tuần (0=Thứ Hai, 6=Chủ Nhật) | `[0,1,2,3,4]` = Thứ Hai–Sáu |
+| `daysOfMonth` | Các ngày trong tháng | `[1, 15]` = ngày 1 và 15 hàng tháng |
+| `active` | Bật hoặc tắt lịch | `true` / `false` |
+
+**Logic ưu tiên:**
+- Nếu `daysOfWeek` không rỗng → chỉ chạy vào các ngày đó trong tuần
+- Nếu `daysOfMonth` không rỗng → chỉ chạy vào các ngày đó trong tháng
+- Nếu cả hai đều rỗng → chạy mỗi ngày vào `timeOfDay`
+
+### Ví dụ thực tế
+
+**Chạy báo cáo lúc 8:00 mỗi Thứ Hai:**
 ```json
+{ "timeOfDay": "08:00", "daysOfWeek": [0], "daysOfMonth": [], "active": true }
+```
+
+**Chốt sổ ngày 1 và 15 hàng tháng lúc 23:59:**
+```json
+{ "timeOfDay": "23:59", "daysOfWeek": [], "daysOfMonth": [1, 15], "active": true }
+```
+
+### Kết hợp Schedule + Trigger
+
+Đây là mô hình mạnh nhất: **lịch kích hoạt workflow đầu tiên**, workflow đó trigger dây chuyền tiếp theo.
+
+```
+Lịch 8:00 Thứ Hai
+    ↓ (tự động)
+WF A: Lấy dữ liệu từ hệ thống kế toán
+    ↓ on_complete
+WF B: Tổng hợp và tạo file báo cáo
+    ↓ on_complete
+WF C: Upload báo cáo lên Drive và gửi email
+```
+
+**Kết quả:** Sáng thứ Hai mọi người mở email đã thấy báo cáo — không ai cần làm gì cả.
+
+---
+
+## 7. Kích hoạt qua API
+
+Ngoài trigger nội bộ và lịch, workflow còn có thể được gọi từ **hệ thống bên ngoài** (ERP, CRM, webhook...) qua HTTP.
+
+### Lấy API Key của workflow
+
+```bash
+# Xem thông tin permissions và API Key
+curl "http://<server>:8000/api/workflows/<wf-id>/permissions" \
+  -H "Authorization: Bearer <token>"
+```
+
+Trường `apiKey` trong response là key để gọi workflow không cần đăng nhập.
+
+### Gọi chạy workflow qua API
+
+```bash
+curl -X POST "http://<server>:8000/api/run/<wf-id>?api_key=<api-key>"
+```
+
+**Phản hồi:**
+```json
+// Thành công
 {"success": true, "error": null}
-```
 
-**Phản hồi thất bại:**
-```json
+// Thất bại
 {"success": false, "error": "Mô tả lỗi"}
 ```
 
-Giới hạn thời gian thực thi: **5 phút**. Nếu quá thời gian, API trả về lỗi `Execution timed out`.
+Giới hạn thời gian chờ: **5 phút**. Nếu workflow chạy quá 5 phút, API trả về lỗi `Execution timed out`.
 
-### Tạo lại API Key
+### Tạo lại API Key (khi bị lộ)
 
-1. Vào tab **Permissions**
-2. Nhấn **Regenerate API Key**
-3. Lưu lại key mới (key cũ sẽ bị vô hiệu hóa)
+```bash
+curl -X POST "http://<server>:8000/api/workflows/<wf-id>/permissions/apikey" \
+  -H "Authorization: Bearer <token>"
+```
+
+API Key cũ lập tức mất hiệu lực.
+
+### Ví dụ tích hợp
+
+**Tình huống:** Hệ thống ERP xử lý xong đơn hàng → gọi AutoStep để tự động in phiếu xuất kho:
+
+```python
+import requests
+
+def trigger_warehouse_print(order_id):
+    response = requests.post(
+        "http://autostep-server:8000/api/run/wf-xuat-kho-123",
+        params={"api_key": "your-api-key"}
+    )
+    return response.json()["success"]
+```
 
 ---
 
-## 13. Quản trị người dùng (Admin)
+## 8. Quản lý người dùng (Admin)
 
 Chỉ tài khoản **Admin** mới truy cập được trang `/admin`.
 
-### Quản lý người dùng
+### Tạo người dùng mới
 
-Vào menu → **Admin** để:
+1. Vào menu → **Admin** → nhấn **Add User**
+2. Điền **Username** và **Password** (tối thiểu 6 ký tự)
+3. Tích **Admin** nếu cần cấp quyền quản trị
+4. Nhấn **Create**
 
-#### Tạo người dùng mới
+> Nếu muốn thiết lập cấu trúc Manager (cấp trên/nhân viên), dùng API:
+> ```bash
+> curl -X POST "http://<server>:8000/api/users" \
+>   -H "Authorization: Bearer <token>" \
+>   -H "Content-Type: application/json" \
+>   -d '{"username": "nhanvien1", "password": "123456", "isAdmin": false, "managerId": 3}'
+> ```
 
-1. Nhấn **Create User**
-2. Điền:
-   - **Username**: tên đăng nhập (duy nhất)
-   - **Password**: mật khẩu (tối thiểu 6 ký tự)
-   - **Admin**: có/không
-   - **Manager**: chọn người quản lý (tùy chọn)
-3. Nhấn **Create**
+### Cấu trúc cấp quản lý
 
-Nếu không chỉ định Manager, hệ thống tự gán Admin đầu tiên làm Manager.
+Khi tạo user, chỉ định `managerId` để phân cấp:
 
-#### Cấu trúc Manager
+```
+Admin (id=1)
+ └── Trưởng phòng A (id=3, managerId=1)
+      ├── Nhân viên 1 (managerId=3)  → WF của NV1 → TP A tự có toàn quyền
+      └── Nhân viên 2 (managerId=3)  → WF của NV2 → TP A tự có toàn quyền
+```
 
-- Mỗi người dùng có thể có một **Manager** (người cấp trên trực tiếp)
-- Khi user tạo workflow, **chuỗi manager** (user → manager → manager của manager → ...) đều tự động nhận đủ quyền trên workflow đó
-- Admin luôn có quyền trên tất cả workflow
+Quyền thừa hưởng truyền lên toàn bộ chuỗi: Nhân viên → Trưởng phòng → Giám đốc.
 
-#### Đổi mật khẩu người dùng (Admin)
+### Xóa người dùng
 
-1. Trong danh sách người dùng, nhấn **Change Password** bên cạnh user
-2. Nhập mật khẩu mới
-3. Xác nhận
+Nhấn **Delete** bên cạnh user. Các workflow của user đó vẫn còn, `owner` hiển thị là `deleted`.
 
-#### Xóa người dùng
+### Đổi mật khẩu người dùng
 
-Nhấn **Delete** bên cạnh user (không thể xóa chính mình).
+Trong giao diện Admin, dùng nút **Change Password** bên cạnh mỗi user.
 
-> Khi xóa user, các workflow do user đó tạo vẫn còn tồn tại nhưng `owner_id` sẽ hiển thị là `deleted`.
-
----
-
-## 14. Bảo mật
-
-### Xác thực
-
-- Sử dụng **JWT (JSON Web Token)** với thuật toán **HS256**
-- Token hết hạn sau **7 ngày**
-- Mật khẩu được băm bằng **bcrypt**
-
-### Khuyến nghị khi deploy production
-
-1. **Đổi JWT_SECRET:**
-   ```bash
-   export JWT_SECRET="chuoi-bi-mat-phuc-tap-cua-ban"
-   uvicorn app.main:app --host 0.0.0.0 --port 8000
-   ```
-
-2. **Đổi mật khẩu admin mặc định** (`admin` / `123456`) ngay sau lần đầu đăng nhập
-
-3. **Dùng HTTPS** – đặt Nginx làm reverse proxy với TLS:
-   ```nginx
-   server {
-       listen 443 ssl;
-       location / { proxy_pass http://127.0.0.1:8000; }
-       location /ws {
-           proxy_pass http://127.0.0.1:8000;
-           proxy_http_version 1.1;
-           proxy_set_header Upgrade $http_upgrade;
-           proxy_set_header Connection "upgrade";
-       }
-   }
-   ```
-
-4. **Giới hạn CORS** – trong `app/main.py`, thay `allow_origins=['*']` bằng domain cụ thể
-
-5. **Backup CSDL** – sao lưu file `automation.db` định kỳ
+Người dùng tự đổi mật khẩu: menu góc phải → **Change Password**.
 
 ---
 
-## 15. Tham chiếu API REST
+## 9. Tham chiếu API REST
 
-Tất cả API cần header: `Authorization: Bearer <token>` (trừ `/api/auth/login` và `/api/run/...`).
+Tất cả endpoint (trừ login và `/api/run/...`) cần header:
+```
+Authorization: Bearer <jwt-token>
+```
 
-### Xác thực
-
-| Method | Endpoint | Mô tả |
-|---|---|---|
-| `POST` | `/api/auth/login` | Đăng nhập, nhận token |
-| `GET` | `/api/auth/me` | Thông tin user hiện tại |
-| `PUT` | `/api/auth/password` | Đổi mật khẩu |
+Lấy token bằng cách đăng nhập:
+```bash
+curl -X POST "http://<server>:8000/api/auth/login" \
+  -H "Content-Type: application/json" \
+  -d '{"username": "admin", "password": "123456"}'
+# → {"token": "eyJ..."}
+```
 
 ### Workflows
 
 | Method | Endpoint | Mô tả |
-|---|---|---|
+|--------|----------|-------|
 | `GET` | `/api/workflows` | Danh sách workflow có quyền xem |
 | `POST` | `/api/workflows` | Tạo workflow mới |
 | `GET` | `/api/workflows/{id}` | Chi tiết workflow |
@@ -564,68 +466,65 @@ Tất cả API cần header: `Authorization: Bearer <token>` (trừ `/api/auth/l
 ### Phân quyền
 
 | Method | Endpoint | Mô tả |
-|---|---|---|
-| `GET` | `/api/workflows/{id}/permissions` | Danh sách quyền |
-| `POST` | `/api/workflows/{id}/permissions` | Cấp/cập nhật quyền |
+|--------|----------|-------|
+| `GET` | `/api/workflows/{id}/permissions` | Xem danh sách quyền + API Key |
+| `POST` | `/api/workflows/{id}/permissions` | Cấp/cập nhật quyền cho user |
 | `DELETE` | `/api/workflows/{id}/permissions/{perm_id}` | Thu hồi quyền |
 | `POST` | `/api/workflows/{id}/permissions/apikey` | Tạo lại API Key |
+
+Body để cấp quyền:
+```json
+{
+  "userId": 5,
+  "canView": true,
+  "canRun": true,
+  "canEdit": false,
+  "canDelete": false
+}
+```
 
 ### Triggers
 
 | Method | Endpoint | Mô tả |
-|---|---|---|
-| `GET` | `/api/workflows/{id}/triggers` | Danh sách trigger |
-| `POST` | `/api/workflows/{id}/triggers` | Thêm trigger |
+|--------|----------|-------|
+| `GET` | `/api/workflows/{id}/triggers` | Danh sách trigger của workflow |
+| `POST` | `/api/workflows/{id}/triggers` | Thêm trigger mới |
 | `DELETE` | `/api/workflows/{id}/triggers/{trigger_id}` | Xóa trigger |
+
+Body để thêm trigger:
+```json
+{
+  "sourceWorkflowId": "<wf-id-nguon>",
+  "triggerType": "on_complete"
+}
+```
+hoặc:
+```json
+{
+  "sourceWorkflowId": "<wf-id-nguon>",
+  "triggerType": "on_step",
+  "stepIndex": 2
+}
+```
 
 ### Lịch chạy
 
 | Method | Endpoint | Mô tả |
-|---|---|---|
-| `GET` | `/api/workflows/{id}/schedule` | Xem lịch chạy |
-| `PUT` | `/api/workflows/{id}/schedule` | Cài/cập nhật lịch chạy |
-| `DELETE` | `/api/workflows/{id}/schedule` | Xóa lịch chạy |
+|--------|----------|-------|
+| `GET` | `/api/workflows/{id}/schedule` | Xem lịch hiện tại |
+| `PUT` | `/api/workflows/{id}/schedule` | Cài/cập nhật lịch |
+| `DELETE` | `/api/workflows/{id}/schedule` | Xóa lịch |
 
-### Người dùng (Admin only)
+### Người dùng (chỉ Admin)
 
 | Method | Endpoint | Mô tả |
-|---|---|---|
+|--------|----------|-------|
 | `GET` | `/api/users` | Danh sách người dùng |
-| `POST` | `/api/users` | Tạo người dùng mới |
-| `PATCH` | `/api/users/{id}` | Cập nhật (admin/manager) |
-| `PUT` | `/api/users/{id}/password` | Đổi mật khẩu người dùng |
+| `POST` | `/api/users` | Tạo người dùng |
+| `PATCH` | `/api/users/{id}` | Cập nhật (isAdmin, managerId) |
+| `PUT` | `/api/users/{id}/password` | Đổi mật khẩu |
 | `DELETE` | `/api/users/{id}` | Xóa người dùng |
-
-### Tools
-
-| Method | Endpoint | Mô tả |
-|---|---|---|
-| `POST` | `/api/tools/pick-coordinate` | Lấy tọa độ chuột hiện tại |
-
-### WebSocket
-
-| Endpoint | Mô tả |
-|---|---|
-| `ws://<server>/ws?token=<jwt>` | Kết nối thực thi workflow real-time |
-
-**Gửi message để chạy:**
-```json
-{"type": "start", "steps": [...], "workflowId": "<id>"}
-```
-
-**Gửi message để dừng:**
-```json
-{"type": "cancel"}
-```
-
-**Nhận events:**
-- `{"type": "start", "total": 5}` – bắt đầu
-- `{"type": "step", "index": 0, "status": "running"}` – trạng thái step
-- `{"type": "log", "message": "..."}` – log message
-- `{"type": "done", "total": 5}` – hoàn thành
-- `{"type": "error", "stepIndex": 2, "error": "..."}` – lỗi
-- `{"type": "cancelled", "stoppedAt": -1}` – đã dừng
 
 ---
 
-*Tài liệu này mô tả hệ thống AutoStep dựa trên mã nguồn tại `/home/ks/Thanh/AutomatedStep`.*
+*Để được hỗ trợ hoặc báo lỗi, liên hệ đội phát triển nội bộ.*
