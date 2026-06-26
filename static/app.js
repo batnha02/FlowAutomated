@@ -42,7 +42,7 @@ const S = {
   _allWorkflows: [],
   _stepEditIndex: null,
   _savePublic: false,
-  localMode: localStorage.getItem('localMode') === '1',
+  localMode: true,
   agentPort: parseInt(localStorage.getItem('agentPort') || '8001', 10),
   _stepMasked: false,
 };
@@ -345,11 +345,7 @@ function renderEditor(id) {
           <span id="readonly-badge" class="badge-readonly" style="display:none">👁 Read Only</span>
           <button class="btn btn-primary btn-sm" id="btn-save" onclick="showSaveDialog()" style="display:none">☁ Save</button>
           <button class="btn btn-secondary btn-sm" id="btn-settings" onclick="openWorkflowSettings()" style="display:none">⚙ Settings</button>
-          <label class="local-toggle" id="local-toggle-wrap" title="Thực thi trên máy PC này (cần chạy agent.py)">
-            <input type="checkbox" id="chk-local" onchange="setLocalMode(this.checked)" ${S.localMode ? 'checked' : ''} />
-            <span>🖥 Local PC</span>
-          </label>
-          <span class="agent-dot" id="agent-dot"></span>
+          <span class="agent-dot" id="agent-dot" title="Local Agent"></span>
           <button class="btn btn-success btn-sm" id="btn-run" onclick="runWorkflow()" style="display:none">▶ Run</button>
         </div>
       </div>
@@ -526,13 +522,11 @@ function moveStep(i, dir) {
 async function runWorkflow() {
   if (S.wf.steps.length === 0) { toast('No steps to execute', 'error'); return; }
 
-  if (S.localMode) {
-    const ok = await checkAgentStatus();
-    if (!ok) {
-      toast(`Local agent không chạy — hãy chạy start_agent.bat (port ${S.agentPort})`, 'error');
-      updateAgentDot();
-      return;
-    }
+  const ok = await checkAgentStatus();
+  if (!ok) {
+    updateAgentDot();
+    showAgentOfflineModal();
+    return;
   }
 
   S.running = true;
@@ -567,23 +561,18 @@ function stopWorkflow() {
   endExecution();
 }
 
-function setLocalMode(on) {
-  S.localMode = on;
-  localStorage.setItem('localMode', on ? '1' : '0');
-  updateAgentDot();
-}
-
 async function updateAgentDot() {
   const dot = document.getElementById('agent-dot');
   if (!dot) return;
-  if (!S.localMode) { dot.className = 'agent-dot'; return; }
   dot.className = 'agent-dot checking';
   dot.title = 'Đang kiểm tra...';
   const ok = await checkAgentStatus();
   dot.className = 'agent-dot ' + (ok ? 'online' : 'offline');
   dot.title = ok
     ? `Agent đang chạy trên port ${S.agentPort}`
-    : `Agent chưa chạy — hãy chạy start_agent.bat`;
+    : `Agent chưa chạy — click để tải start_agent.bat`;
+  dot.onclick = ok ? null : () => showAgentOfflineModal();
+  dot.style.cursor = ok ? '' : 'pointer';
 }
 
 async function checkAgentStatus() {
@@ -597,6 +586,34 @@ async function checkAgentStatus() {
   } catch {
     return false;
   }
+}
+
+function showAgentOfflineModal() {
+  const root = document.getElementById('modal-root');
+  root.innerHTML = `
+    <div class="modal-overlay" onclick="closeModal(event)">
+      <div class="modal" style="max-width:460px" onclick="event.stopPropagation()">
+        <div class="modal-header">
+          <span class="modal-title">🖥 Local Agent chưa chạy</span>
+          <button class="btn-close-modal" onclick="closeModal()">✕</button>
+        </div>
+        <div class="modal-body" style="display:flex;flex-direction:column;gap:12px">
+          <p style="margin:0">Agent chưa khởi động trên máy này (port <strong>${S.agentPort}</strong>). Thực hiện 3 bước:</p>
+          <ol style="margin:0;padding-left:20px;line-height:2">
+            <li>Tải file <strong>autostep-agent.zip</strong> (nút bên dưới)</li>
+            <li>Giải nén → vào thư mục <code>autostep-agent</code> → double-click <strong>start_agent.bat</strong></li>
+            <li>Chờ terminal hiện <em>"Agent WebSocket : ws://localhost:${S.agentPort}/ws"</em> rồi quay lại nhấn ▶ Run</li>
+          </ol>
+          <div style="background:var(--bg-secondary,#f4f4f5);border-radius:6px;padding:8px 12px;font-size:12px;font-family:monospace;color:var(--text-muted,#888)">
+            Yêu cầu: Python 3.11+ đã cài trên máy
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" onclick="closeModal()">Đóng</button>
+          <a class="btn btn-primary" href="/download/autostep-agent.zip" download>⬇ Tải autostep-agent.zip</a>
+        </div>
+      </div>
+    </div>`;
 }
 
 function handleWsMsg(data) {

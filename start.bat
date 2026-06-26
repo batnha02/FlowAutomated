@@ -22,5 +22,5 @@ echo   URL   : http://localhost:8000
 echo   Login : admin / 123456
 echo.
 
-venv\Scripts\python.exe run_server.py %*
+venv\Scripts\python.exe run_server.py --reload %*
 pause

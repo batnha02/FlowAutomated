@@ -1,8 +1,10 @@
 import asyncio
+import io
 import json
+import zipfile
 from pathlib import Path
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query, Depends, HTTPException
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query, Depends, HTTPException, Request
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.db import init_db, get_conn, get_user_perms
@@ -96,6 +98,98 @@ async def api_run(wf_id: str, api_key: str = Query(...)):
 
 
 # ── Static files ──────────────────────────────────────────────────────────────
+
+_BAT_CONTENT = (
+    "@echo off\r\n"
+    "chcp 65001 >nul\r\n"
+    "cd /d \"%~dp0\"\r\n"
+    "echo ====================================================\r\n"
+    "echo  AutoStep Local Agent\r\n"
+    "echo ====================================================\r\n"
+    "\r\n"
+    "if not exist agent_standalone.py (\r\n"
+    "    echo [LOI] Khong tim thay agent_standalone.py trong cung thu muc.\r\n"
+    "    echo Hay giai nen lai file autostep-agent.zip va chay bat trong thu muc do.\r\n"
+    "    pause\r\n"
+    "    exit /b 1\r\n"
+    ")\r\n"
+    "\r\n"
+    "if not exist venv (\r\n"
+    "    echo Tao virtual environment...\r\n"
+    "    python -m venv venv\r\n"
+    "    if errorlevel 1 (\r\n"
+    "        echo [LOI] Khong tim thay Python 3.11+. Hay cai Python va thu lai.\r\n"
+    "        pause\r\n"
+    "        exit /b 1\r\n"
+    "    )\r\n"
+    ")\r\n"
+    "\r\n"
+    "echo Cai dat dependencies...\r\n"
+    "venv\\Scripts\\pip install -q fastapi \"uvicorn[standard]\" playwright\r\n"
+    "\r\n"
+    "echo Cai Playwright browser (bo qua neu da co)...\r\n"
+    "venv\\Scripts\\playwright install chromium >nul 2>&1\r\n"
+    "\r\n"
+    ":: Dang ky tu dong chay ngam khi khoi dong Windows (chi thuc hien 1 lan)\r\n"
+    "schtasks /query /tn \"AutoStep Agent\" >nul 2>&1\r\n"
+    "if errorlevel 1 (\r\n"
+    "    echo Dang ky tu dong khoi dong cung Windows...\r\n"
+    "    schtasks /create /tn \"AutoStep Agent\" /tr \"wscript.exe \\\"%~dp0run_hidden.vbs\\\"\" /sc onlogon /f >nul 2>&1\r\n"
+    "    if errorlevel 1 (\r\n"
+    "        echo [CANH BAO] Khong the dang ky - thu chay lai voi quyen Administrator.\r\n"
+    "    ) else (\r\n"
+    "        echo Da dang ky: Agent se tu dong chay ngam khi dang nhap Windows.\r\n"
+    "    )\r\n"
+    ") else (\r\n"
+    "    echo Tu dong khoi dong: da dang ky truoc do.\r\n"
+    ")\r\n"
+    "\r\n"
+    "echo.\r\n"
+    "echo   Agent WebSocket : ws://localhost:8001/ws\r\n"
+    "echo   Mo AutoStep web app va nhan Run de chay workflow.\r\n"
+    "echo.\r\n"
+    "\r\n"
+    "venv\\Scripts\\python.exe agent_standalone.py\r\n"
+    "pause\r\n"
+)
+
+_VBS_CONTENT = (
+    "' AutoStep Local Agent — chay ngam khi khoi dong Windows\r\n"
+    "Option Explicit\r\n"
+    "Dim WshShell, strDir\r\n"
+    'strDir = Left(WScript.ScriptFullName, InStrRev(WScript.ScriptFullName, "\\") - 1)\r\n'
+    'Set WshShell = CreateObject("WScript.Shell")\r\n'
+    "WshShell.CurrentDirectory = strDir\r\n"
+    'WshShell.Run """" & strDir & "\\venv\\Scripts\\pythonw.exe"" """ & strDir & "\\agent_standalone.py""", 0, False\r\n'
+    "Set WshShell = Nothing\r\n"
+)
+
+
+@app.get('/download/autostep-agent.zip', include_in_schema=False)
+def download_agent_zip():
+    py_path = Path(__file__).parent.parent / 'agent_standalone.py'
+    if not py_path.exists():
+        raise HTTPException(status_code=404, detail='agent_standalone.py not found')
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr('autostep-agent/start_agent.bat', _BAT_CONTENT)
+        zf.writestr('autostep-agent/run_hidden.vbs', _VBS_CONTENT)
+        zf.write(str(py_path), 'autostep-agent/agent_standalone.py')
+    buf.seek(0)
+    return StreamingResponse(
+        buf,
+        media_type='application/zip',
+        headers={'Content-Disposition': 'attachment; filename="autostep-agent.zip"'},
+    )
+
+
+@app.get('/download/agent_standalone.py', include_in_schema=False)
+def download_agent_standalone():
+    py_path = Path(__file__).parent.parent / 'agent_standalone.py'
+    if not py_path.exists():
+        raise HTTPException(status_code=404, detail='agent_standalone.py not found')
+    return FileResponse(str(py_path), media_type='text/x-python', filename='agent_standalone.py')
+
 
 @app.get('/app.css', include_in_schema=False)
 def serve_css():
