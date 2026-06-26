@@ -128,27 +128,59 @@ async def _do_keyboard(window_title: str, text: str, os_name: str) -> None:
         if proc.returncode != 0:
             raise RuntimeError(stderr.decode().strip() or 'xdotool type failed')
     elif os_name == 'windows':
-        wt_esc = window_title.replace("'", "''")
-        focus = (
-            f"Add-Type -AssemblyName Microsoft.VisualBasic\n"
-            f"[Microsoft.VisualBasic.Interaction]::AppActivate('{wt_esc}')\n"
-            f"Start-Sleep -Milliseconds 300\n"
-        ) if window_title else ''
-        txt_esc = text.replace("'", "''")
-        await _ps(f"""\
-{focus}Set-Clipboard -Value '{txt_esc}'
-Add-Type @"
-using System.Runtime.InteropServices;
-public class KBD {{
-    [DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte scan, uint flags, int extra);
-}}
-"@
-[KBD]::keybd_event(0x11, 0, 0, 0)
-[KBD]::keybd_event(0x56, 0, 0, 0)
-Start-Sleep -Milliseconds 50
-[KBD]::keybd_event(0x56, 0, 2, 0)
-[KBD]::keybd_event(0x11, 0, 2, 0)
-""")
+        import ctypes
+        import ctypes.wintypes as _wt
+        _u32 = ctypes.windll.user32
+        _k32 = ctypes.windll.kernel32
+
+        if window_title:
+            _found: list[int] = []
+            _EnumProc = ctypes.WINFUNCTYPE(ctypes.c_bool, _wt.HWND, _wt.LPARAM)
+
+            @_EnumProc
+            def _cb(hwnd, _):
+                if _u32.IsWindowVisible(hwnd):
+                    n = _u32.GetWindowTextLengthW(hwnd) + 1
+                    buf = ctypes.create_unicode_buffer(n)
+                    _u32.GetWindowTextW(hwnd, buf, n)
+                    if window_title.lower() in buf.value.lower():
+                        _found.append(hwnd)
+                return True
+
+            _u32.EnumWindows(_cb, 0)
+            if _found:
+                _hwnd = _found[0]
+                _fg = _u32.GetForegroundWindow()
+                _fg_tid = _u32.GetWindowThreadProcessId(_fg, None)
+                _our_tid = _k32.GetCurrentThreadId()
+                if _fg_tid != _our_tid:
+                    _u32.AttachThreadInput(_our_tid, _fg_tid, True)
+                _u32.ShowWindow(_hwnd, 9)        # SW_RESTORE
+                _u32.SetForegroundWindow(_hwnd)
+                _u32.BringWindowToTop(_hwnd)
+                if _fg_tid != _our_tid:
+                    _u32.AttachThreadInput(_our_tid, _fg_tid, False)
+                await asyncio.sleep(0.3)
+
+        # Set clipboard via Win32 — no subprocess, no Add-Type compilation delay
+        _text_bytes = (text + '\0').encode('utf-16-le')
+        _hmem = _k32.GlobalAlloc(0x0002, len(_text_bytes))  # GMEM_MOVEABLE
+        if not _hmem:
+            raise RuntimeError('GlobalAlloc failed')
+        ctypes.memmove(_k32.GlobalLock(_hmem), _text_bytes, len(_text_bytes))
+        _k32.GlobalUnlock(_hmem)
+        if not _u32.OpenClipboard(None):
+            raise RuntimeError('OpenClipboard failed')
+        _u32.EmptyClipboard()
+        _u32.SetClipboardData(13, _hmem)        # CF_UNICODETEXT = 13
+        _u32.CloseClipboard()
+
+        # Ctrl+V via keybd_event — sends to current foreground window
+        _u32.keybd_event(0x11, 0, 0, 0)        # VK_CONTROL down
+        _u32.keybd_event(0x56, 0, 0, 0)        # VK_V down
+        await asyncio.sleep(0.05)
+        _u32.keybd_event(0x56, 0, 0x0002, 0)   # VK_V up
+        _u32.keybd_event(0x11, 0, 0x0002, 0)   # VK_CONTROL up
     else:
         raise RuntimeError(f'Keyboard input not supported on {os_name}')
 
