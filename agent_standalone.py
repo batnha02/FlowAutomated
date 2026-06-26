@@ -128,16 +128,26 @@ async def _do_keyboard(window_title: str, text: str, os_name: str) -> None:
         if proc.returncode != 0:
             raise RuntimeError(stderr.decode().strip() or 'xdotool type failed')
     elif os_name == 'windows':
+        wt_esc = window_title.replace("'", "''")
         focus = (
-            f'Add-Type -AssemblyName Microsoft.VisualBasic\n'
-            f'[Microsoft.VisualBasic.Interaction]::AppActivate("{window_title}")\n'
-            f'Start-Sleep -Milliseconds 150\n'
+            f"Add-Type -AssemblyName Microsoft.VisualBasic\n"
+            f"[Microsoft.VisualBasic.Interaction]::AppActivate('{wt_esc}')\n"
+            f"Start-Sleep -Milliseconds 300\n"
         ) if window_title else ''
-        escaped = text.replace('`', '``').replace('"', '`"').replace('$', '`$')
+        txt_esc = text.replace("'", "''")
         await _ps(f"""\
-{focus}Add-Type -AssemblyName System.Windows.Forms
-[System.Windows.Forms.Clipboard]::SetText("{escaped}")
-[System.Windows.Forms.SendKeys]::SendWait("^v")
+{focus}Set-Clipboard -Value '{txt_esc}'
+Add-Type @"
+using System.Runtime.InteropServices;
+public class KBD {{
+    [DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte scan, uint flags, int extra);
+}}
+"@
+[KBD]::keybd_event(0x11, 0, 0, 0)
+[KBD]::keybd_event(0x56, 0, 0, 0)
+Start-Sleep -Milliseconds 50
+[KBD]::keybd_event(0x56, 0, 2, 0)
+[KBD]::keybd_event(0x11, 0, 2, 0)
 """)
     else:
         raise RuntimeError(f'Keyboard input not supported on {os_name}')
