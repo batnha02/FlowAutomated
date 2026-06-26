@@ -1,5 +1,5 @@
 from fastapi import APIRouter, HTTPException, Depends
-from app.db import get_conn
+from app.db import get_conn, backfill_manager_permissions
 from app.auth import hash_password, get_current_user, require_admin
 from app.models import CreateUserRequest, UpdateUserRequest, AdminChangePasswordRequest
 
@@ -63,13 +63,19 @@ def create_user(body: CreateUserRequest, admin: dict = Depends(require_admin)):
         'INSERT INTO users (username, password_hash, is_admin, manager_id) VALUES (?, ?, ?, ?)',
         (body.username.strip(), hash_password(body.password), 1 if body.isAdmin else 0, manager_id)
     )
+    new_user_id = cur.lastrowid
+    # Grant the new user's manager chain access to any workflows in their subtree.
+    # For a brand-new user this is a no-op, but handles the edge case where
+    # an existing user tree is re-parented via a fresh account.
+    if manager_id:
+        backfill_manager_permissions(conn, manager_id, new_user_id)
     conn.commit()
     row = conn.execute('''
         SELECT u.id, u.username, u.is_admin, u.manager_id, u.created_at,
                m.username AS manager_username
         FROM users u LEFT JOIN users m ON u.manager_id = m.id
         WHERE u.id = ?
-    ''', (cur.lastrowid,)).fetchone()
+    ''', (new_user_id,)).fetchone()
     conn.close()
     return {
         'id': row['id'],
@@ -95,6 +101,7 @@ def update_user(user_id: int, body: UpdateUserRequest, admin: dict = Depends(req
             raise HTTPException(status_code=400, detail='Cannot modify your own admin status')
         conn.execute('UPDATE users SET is_admin=? WHERE id=?', (1 if body.isAdmin else 0, user_id))
 
+    new_manager_id = None
     if body.managerId is not None:
         # Validate manager
         mgr = conn.execute('SELECT id FROM users WHERE id=?', (body.managerId,)).fetchone()
@@ -102,9 +109,15 @@ def update_user(user_id: int, body: UpdateUserRequest, admin: dict = Depends(req
             conn.close()
             raise HTTPException(status_code=400, detail='Manager not found')
         conn.execute('UPDATE users SET manager_id=? WHERE id=?', (body.managerId, user_id))
+        new_manager_id = body.managerId
     elif body.managerId == 0:
         # Clear manager
         conn.execute('UPDATE users SET manager_id=NULL WHERE id=?', (user_id,))
+
+    # When a user gets a new manager, grant that manager (and their chain above)
+    # access to all workflows visible to this user's full subordinate subtree.
+    if new_manager_id:
+        backfill_manager_permissions(conn, new_manager_id, user_id)
 
     conn.commit()
     conn.close()

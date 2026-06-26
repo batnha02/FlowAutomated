@@ -193,3 +193,53 @@ def auto_grant_permissions(conn: sqlite3.Connection, workflow_id: str, creator_i
     for adm in admins:
         if adm['id'] not in visited:
             grant_workflow_permissions(conn, workflow_id, adm['id'], creator_id)
+
+
+def _get_full_subtree(conn: sqlite3.Connection, user_id: int) -> set[int]:
+    """Return user_id + all recursive subordinates (BFS)."""
+    result: set[int] = set()
+    queue = [user_id]
+    while queue:
+        uid = queue.pop()
+        if uid in result:
+            continue
+        result.add(uid)
+        subs = conn.execute('SELECT id FROM users WHERE manager_id=?', (uid,)).fetchall()
+        queue.extend(s['id'] for s in subs)
+    return result
+
+
+def backfill_manager_permissions(conn: sqlite3.Connection, new_manager_id: int, subordinate_id: int):
+    """
+    Call this when user Y (subordinate_id) is assigned a new manager X (new_manager_id).
+    Grants X — and every level of X's manager chain — all workflow permissions
+    that Y's full subtree (Y + recursive subordinates) currently has access to.
+    """
+    subtree = _get_full_subtree(conn, subordinate_id)
+    if not subtree:
+        return
+
+    ids = list(subtree)
+    placeholders = ','.join('?' * len(ids))
+
+    owned = conn.execute(
+        f'SELECT DISTINCT id as wf_id FROM workflows WHERE owner_id IN ({placeholders})',
+        ids
+    ).fetchall()
+    permed = conn.execute(
+        f'SELECT DISTINCT workflow_id as wf_id FROM workflow_permissions WHERE user_id IN ({placeholders})',
+        ids
+    ).fetchall()
+
+    wf_ids = {r['wf_id'] for r in owned} | {r['wf_id'] for r in permed}
+    if not wf_ids:
+        return
+
+    visited: set[int] = set()
+    current = new_manager_id
+    while current and current not in visited:
+        visited.add(current)
+        for wf_id in wf_ids:
+            grant_workflow_permissions(conn, wf_id, current, subordinate_id)
+        row = conn.execute('SELECT manager_id FROM users WHERE id=?', (current,)).fetchone()
+        current = row['manager_id'] if row and row['manager_id'] else None
