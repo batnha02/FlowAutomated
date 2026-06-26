@@ -38,10 +38,15 @@ async def _shell(cmd: str) -> None:
 
 async def _ps(script: str) -> None:
     encoded = base64.b64encode(script.encode('utf-16-le')).decode()
+    kwargs: dict = {}
+    if sys.platform == 'win32':
+        kwargs['creationflags'] = 0x08000000  # CREATE_NO_WINDOW — prevent PS window from stealing focus
     proc = await asyncio.create_subprocess_exec(
-        'powershell', '-NoProfile', '-NonInteractive', '-EncodedCommand', encoded,
+        'powershell', '-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden',
+        '-EncodedCommand', encoded,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        **kwargs,
     )
     _, stderr = await proc.communicate()
     if proc.returncode != 0:
@@ -165,7 +170,7 @@ async def _do_open_app(target: str, os_name: str) -> None:
         raise RuntimeError(f'App not found: "{target}". Check the path or app name.')
     except OSError as e:
         raise RuntimeError(f'Failed to open "{target}": {e}')
-    await asyncio.sleep(0.8)
+    await asyncio.sleep(1.5)  # give the app time to fully load before next step
 
 
 def _resolve_selector(target: str) -> tuple[str, str | None]:
