@@ -13,6 +13,7 @@ import base64
 import platform
 import re
 import sys
+from pathlib import Path
 from typing import Any
 
 if sys.platform == 'win32':
@@ -500,7 +501,12 @@ if __name__ == '__main__':
 
     _register_autostart()
 
-    sep = '═' * 52
+    try:
+        sys.stdout.reconfigure(encoding='utf-8')
+    except Exception:
+        pass
+
+    sep = '=' * 52
     print(f'\n{sep}')
     print('  AutoStep Local Agent')
     print(sep)
