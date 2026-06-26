@@ -130,38 +130,13 @@ _BAT_CONTENT = (
     "echo Cai Playwright browser (bo qua neu da co)...\r\n"
     "venv\\Scripts\\playwright install chromium >nul 2>&1\r\n"
     "\r\n"
-    ":: Dang ky tu dong chay ngam khi khoi dong Windows (chi thuc hien 1 lan)\r\n"
-    "schtasks /query /tn \"AutoStep Agent\" >nul 2>&1\r\n"
-    "if errorlevel 1 (\r\n"
-    "    echo Dang ky tu dong khoi dong cung Windows...\r\n"
-    "    schtasks /create /tn \"AutoStep Agent\" /tr \"wscript.exe \\\"%~dp0run_hidden.vbs\\\"\" /sc onlogon /f >nul 2>&1\r\n"
-    "    if errorlevel 1 (\r\n"
-    "        echo [CANH BAO] Khong the dang ky - thu chay lai voi quyen Administrator.\r\n"
-    "    ) else (\r\n"
-    "        echo Da dang ky: Agent se tu dong chay ngam khi dang nhap Windows.\r\n"
-    "    )\r\n"
-    ") else (\r\n"
-    "    echo Tu dong khoi dong: da dang ky truoc do.\r\n"
-    ")\r\n"
-    "\r\n"
     "echo.\r\n"
-    "echo   Agent WebSocket : ws://localhost:8001/ws\r\n"
-    "echo   Mo AutoStep web app va nhan Run de chay workflow.\r\n"
+    "echo   Lan dau chay: agent se tu dong dang ky khoi dong cung Windows.\r\n"
+    "echo   Tu lan sau, agent chay ngam khong can thao tac thu cong.\r\n"
     "echo.\r\n"
     "\r\n"
     "venv\\Scripts\\python.exe agent_standalone.py\r\n"
     "pause\r\n"
-)
-
-_VBS_CONTENT = (
-    "' AutoStep Local Agent — chay ngam khi khoi dong Windows\r\n"
-    "Option Explicit\r\n"
-    "Dim WshShell, strDir\r\n"
-    'strDir = Left(WScript.ScriptFullName, InStrRev(WScript.ScriptFullName, "\\") - 1)\r\n'
-    'Set WshShell = CreateObject("WScript.Shell")\r\n'
-    "WshShell.CurrentDirectory = strDir\r\n"
-    'WshShell.Run """" & strDir & "\\venv\\Scripts\\pythonw.exe"" """ & strDir & "\\agent_standalone.py""", 0, False\r\n'
-    "Set WshShell = Nothing\r\n"
 )
 
 
@@ -173,7 +148,6 @@ def download_agent_zip():
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
         zf.writestr('autostep-agent/start_agent.bat', _BAT_CONTENT)
-        zf.writestr('autostep-agent/run_hidden.vbs', _VBS_CONTENT)
         zf.write(str(py_path), 'autostep-agent/agent_standalone.py')
     buf.seek(0)
     return StreamingResponse(

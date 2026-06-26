@@ -468,10 +468,37 @@ async def ws_endpoint(ws: WebSocket):
                 pass
 
 
+def _register_autostart() -> None:
+    """Đăng ký agent tự chạy ngầm (pythonw.exe) mỗi khi user đăng nhập Windows."""
+    if sys.platform != 'win32':
+        return
+    try:
+        import winreg
+        pythonw = Path(sys.executable).with_name('pythonw.exe')
+        if not pythonw.exists():
+            pythonw = Path(sys.executable)
+        agent = Path(__file__).resolve()
+        cmd = f'"{pythonw}" "{agent}"'
+        key_path = r'Software\Microsoft\Windows\CurrentVersion\Run'
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0,
+                            winreg.KEY_READ | winreg.KEY_WRITE) as k:
+            try:
+                if winreg.QueryValueEx(k, 'AutoStep Agent')[0] == cmd:
+                    return  # already registered correctly
+            except OSError:
+                pass
+            winreg.SetValueEx(k, 'AutoStep Agent', 0, winreg.REG_SZ, cmd)
+            print('  [Auto-start] Da dang ky chay ngam khi dang nhap Windows.')
+    except Exception as e:
+        print(f'  [Auto-start] Khong the dang ky: {e}')
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='AutoStep Local Agent')
     parser.add_argument('--port', type=int, default=8001)
     args = parser.parse_args()
+
+    _register_autostart()
 
     sep = '═' * 52
     print(f'\n{sep}')
@@ -481,7 +508,7 @@ if __name__ == '__main__':
     print(f'  Health    : http://localhost:{args.port}/health')
     print()
     print('  Moi step se chay truc tiep tren may nay.')
-    print('  Mo AutoStep web app -> bat "Local PC" -> nhan Run.')
+    print('  Mo AutoStep web app va nhan Run de chay workflow.')
     print(f'{sep}\n')
 
     uvicorn.run(app, host='127.0.0.1', port=args.port, log_level='warning')
