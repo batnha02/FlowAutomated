@@ -495,6 +495,13 @@ def _register_autostart() -> None:
 
 
 if __name__ == '__main__':
+    import os
+    # pythonw.exe has no console → sys.stdout/stderr are None → print() crashes
+    if sys.stdout is None:
+        sys.stdout = open(os.devnull, 'w')
+    if sys.stderr is None:
+        sys.stderr = open(os.devnull, 'w')
+
     parser = argparse.ArgumentParser(description='AutoStep Local Agent')
     parser.add_argument('--port', type=int, default=8001)
     args = parser.parse_args()
