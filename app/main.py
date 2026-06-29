@@ -4,7 +4,7 @@ import json
 import zipfile
 from pathlib import Path
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query, Depends, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Response, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.db import init_db, get_conn, get_user_perms
@@ -160,9 +160,8 @@ def download_agent_zip():
     with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
         zf.writestr('autostep-agent/start_agent.bat', _BAT_CONTENT)
         zf.write(str(py_path), 'autostep-agent/agent_standalone.py')
-    buf.seek(0)
-    return StreamingResponse(
-        buf,
+    return Response(
+        content=buf.getvalue(),
         media_type='application/zip',
         headers={'Content-Disposition': 'attachment; filename="autostep-agent.zip"'},
     )

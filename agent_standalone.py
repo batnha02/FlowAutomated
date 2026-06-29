@@ -112,7 +112,52 @@ async def _do_double_click(target: str, os_name: str) -> None:
         await _do_click(target, 1, os_name)
 
 
-async def _do_keyboard(window_title: str, text: str, os_name: str) -> None:
+async def _win32_focus_window(title: str) -> bool:
+    """Find first visible top-level window whose title contains `title` (case-insensitive)
+    and bring it to foreground. Returns True if found. Retries up to 3 times."""
+    import ctypes
+    import ctypes.wintypes as _wt
+    _u32 = ctypes.windll.user32
+    _k32 = ctypes.windll.kernel32
+
+    _found: list[int] = []
+    _EnumProc = ctypes.WINFUNCTYPE(ctypes.c_bool, _wt.HWND, _wt.LPARAM)
+
+    @_EnumProc
+    def _cb(hwnd, _):
+        if _u32.IsWindowVisible(hwnd) and not _u32.GetParent(hwnd):
+            n = _u32.GetWindowTextLengthW(hwnd) + 1
+            buf = ctypes.create_unicode_buffer(n)
+            _u32.GetWindowTextW(hwnd, buf, n)
+            if title.lower() in buf.value.lower():
+                _found.append(hwnd)
+        return True
+
+    _u32.EnumWindows(_cb, 0)
+    if not _found:
+        return False
+
+    _hwnd = _found[0]
+    for _ in range(3):
+        _fg = _u32.GetForegroundWindow()
+        _fg_tid = _u32.GetWindowThreadProcessId(_fg, None)
+        _our_tid = _k32.GetCurrentThreadId()
+        if _fg_tid != _our_tid:
+            _u32.AttachThreadInput(_our_tid, _fg_tid, True)
+        _u32.ShowWindow(_hwnd, 9)            # SW_RESTORE
+        _u32.SetForegroundWindow(_hwnd)
+        _u32.BringWindowToTop(_hwnd)
+        _u32.SwitchToThisWindow(_hwnd, True) # extra push — less restricted than SetForegroundWindow
+        if _fg_tid != _our_tid:
+            _u32.AttachThreadInput(_our_tid, _fg_tid, False)
+        await asyncio.sleep(0.15)
+        if _u32.GetForegroundWindow() == _hwnd:
+            break
+    return True
+
+
+async def _do_keyboard(window_title: str, text: str, os_name: str,
+                       _fallback_app: str = '') -> None:
     if not text:
         raise ValueError('Value (text to type) required for keyboard_input')
     if os_name == 'linux':
@@ -133,34 +178,11 @@ async def _do_keyboard(window_title: str, text: str, os_name: str) -> None:
         _u32 = ctypes.windll.user32
         _k32 = ctypes.windll.kernel32
 
-        if window_title:
-            _found: list[int] = []
-            _EnumProc = ctypes.WINFUNCTYPE(ctypes.c_bool, _wt.HWND, _wt.LPARAM)
-
-            @_EnumProc
-            def _cb(hwnd, _):
-                if _u32.IsWindowVisible(hwnd):
-                    n = _u32.GetWindowTextLengthW(hwnd) + 1
-                    buf = ctypes.create_unicode_buffer(n)
-                    _u32.GetWindowTextW(hwnd, buf, n)
-                    if window_title.lower() in buf.value.lower():
-                        _found.append(hwnd)
-                return True
-
-            _u32.EnumWindows(_cb, 0)
-            if _found:
-                _hwnd = _found[0]
-                _fg = _u32.GetForegroundWindow()
-                _fg_tid = _u32.GetWindowThreadProcessId(_fg, None)
-                _our_tid = _k32.GetCurrentThreadId()
-                if _fg_tid != _our_tid:
-                    _u32.AttachThreadInput(_our_tid, _fg_tid, True)
-                _u32.ShowWindow(_hwnd, 9)        # SW_RESTORE
-                _u32.SetForegroundWindow(_hwnd)
-                _u32.BringWindowToTop(_hwnd)
-                if _fg_tid != _our_tid:
-                    _u32.AttachThreadInput(_our_tid, _fg_tid, False)
-                await asyncio.sleep(0.3)
+        # Use explicit window title if given, otherwise fall back to last opened app name
+        focus_title = window_title or _fallback_app
+        if focus_title:
+            await _win32_focus_window(focus_title)
+            await asyncio.sleep(0.2)
 
         # Set clipboard via Win32 — no subprocess, no Add-Type compilation delay
         _text_bytes = (text + '\0').encode('utf-16-le')
@@ -212,7 +234,13 @@ async def _do_open_app(target: str, os_name: str) -> None:
         raise RuntimeError(f'App not found: "{target}". Check the path or app name.')
     except OSError as e:
         raise RuntimeError(f'Failed to open "{target}": {e}')
-    await asyncio.sleep(1.5)  # give the app time to fully load before next step
+    await asyncio.sleep(1.5)  # give the app time to fully load
+    if os_name == 'windows':
+        # ShellExecute/startfile launches from a background process so the new window
+        # often does NOT receive foreground focus. Actively find and focus it.
+        app_name = Path(target).stem  # "notepad++" from "C:\...\notepad++.exe"
+        await _win32_focus_window(app_name)
+        await asyncio.sleep(0.2)
 
 
 def _resolve_selector(target: str) -> tuple[str, str | None]:
@@ -396,8 +424,9 @@ async def _run_step(step: dict, ws, ctx: dict, cancel: asyncio.Event) -> None:
     elif action == 'double_click':
         await _do_double_click(target, os_name)
     elif action == 'keyboard_input':
-        await _do_keyboard(target, value, os_name)
+        await _do_keyboard(target, value, os_name, ctx.get('_last_app_name', ''))
     elif action == 'open_app':
+        ctx['_last_app_name'] = Path(target).stem
         await _do_open_app(target, os_name)
     elif action == 'hot_key':
         await _do_hotkey(target, value, os_name)
