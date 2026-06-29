@@ -184,12 +184,24 @@ async def _do_keyboard(window_title: str, text: str, os_name: str,
             await _win32_focus_window(focus_title)
             await asyncio.sleep(0.2)
 
-        # Set clipboard via Win32 — no subprocess, no Add-Type compilation delay
+        # Set proper restype so 64-bit pointers are not truncated to c_int
+        _k32.GlobalAlloc.restype = ctypes.c_void_p
+        _k32.GlobalAlloc.argtypes = [ctypes.c_uint, ctypes.c_size_t]
+        _k32.GlobalLock.restype = ctypes.c_void_p
+        _k32.GlobalLock.argtypes = [ctypes.c_void_p]
+        _k32.GlobalUnlock.argtypes = [ctypes.c_void_p]
+        _u32.OpenClipboard.argtypes = [ctypes.c_void_p]
+        _u32.SetClipboardData.restype = ctypes.c_void_p
+        _u32.SetClipboardData.argtypes = [ctypes.c_uint, ctypes.c_void_p]
+
         _text_bytes = (text + '\0').encode('utf-16-le')
         _hmem = _k32.GlobalAlloc(0x0002, len(_text_bytes))  # GMEM_MOVEABLE
         if not _hmem:
             raise RuntimeError('GlobalAlloc failed')
-        ctypes.memmove(_k32.GlobalLock(_hmem), _text_bytes, len(_text_bytes))
+        _ptr = _k32.GlobalLock(_hmem)
+        if not _ptr:
+            raise RuntimeError('GlobalLock failed')
+        ctypes.memmove(_ptr, _text_bytes, len(_text_bytes))
         _k32.GlobalUnlock(_hmem)
         if not _u32.OpenClipboard(None):
             raise RuntimeError('OpenClipboard failed')
