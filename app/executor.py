@@ -381,22 +381,77 @@ def _resolve_selector(target: str) -> tuple[str, str | None]:
     tag_m = re.match(r'<(\w+)', t)
     tag = tag_m.group(1).lower() if tag_m else ''
 
-    id_m = re.search(r'\bid=["\']([^"\']+)["\']', t)
+    def _qval(v: str) -> str:
+        return v.replace('\\', '\\\\').replace('"', '\\"')
+
+    def _attr(name: str, value: str) -> str:
+        return f'[{name}="{_qval(value)}"]'
+
+    # 1. id — unique per page; use attribute selector when value has CSS special chars
+    id_m = re.search(r'\bid=(["\'])([^"\']+)\1', t)
     if id_m:
-        sel = f'#{id_m.group(1)}'
+        raw_id = id_m.group(2)
+        sel = f'#{raw_id}' if not re.search(r'[.:#\[\]()>+~\s]', raw_id) else _attr('id', raw_id)
         return sel, f'HTML detected — using selector: {sel}'
 
-    cls_m = re.search(r'\bclass=["\']([^"\']+)["\']', t)
+    # 2. name — common on form inputs; can match even when id is absent
+    name_m = re.search(r'\bname=(["\'])([^"\']+)\1', t)
+    if name_m:
+        sel = _attr('name', name_m.group(2))
+        return sel, f'HTML detected — using selector: {sel}'
+
+    # 3. data-* automation/test attributes
+    data_m = re.search(
+        r'\b(data-testid|data-id|data-qa|data-cy|data-automation-id|data-auto-id)=(["\'])([^"\']+)\2',
+        t,
+    )
+    if data_m:
+        sel = _attr(data_m.group(1), data_m.group(3))
+        return sel, f'HTML detected — using selector: {sel}'
+
+    # 4. aria-label — accessibility attribute, often unique
+    aria_m = re.search(r'\baria-label=(["\'])([^"\']+)\1', t)
+    if aria_m:
+        sel = _attr('aria-label', aria_m.group(2))
+        return sel, f'HTML detected — using selector: {sel}'
+
+    # 5. placeholder — input hint, often unique within a form
+    ph_m = re.search(r'\bplaceholder=(["\'])([^"\']+)\1', t)
+    if ph_m:
+        sel = _attr('placeholder', ph_m.group(2))
+        return sel, f'HTML detected — using selector: {sel}'
+
+    # 6. class — only use names safe for CSS (.foo); fall back to [class~="x"] for special chars
+    cls_m = re.search(r'\bclass=(["\'])([^"\']+)\1', t)
     if cls_m:
-        classes = '.'.join(cls_m.group(1).split())
-        sel = f'{tag}.{classes}' if tag else f'.{classes}'
+        classes = cls_m.group(2).split()
+        simple = [c for c in classes if re.fullmatch(r'[a-zA-Z0-9_-]+', c)]
+        if simple:
+            parts = '.'.join(simple[:3])
+            sel = f'{tag}.{parts}' if tag else f'.{parts}'
+        else:
+            # class names contain Tailwind/BEM special chars — use word-match attribute selector
+            sel = f'[class~="{_qval(classes[0])}"]'
         return sel, f'HTML detected — using selector: {sel}'
 
+    # 7. text content between tags
     text_m = re.search(r'>([^<]+)</', t)
     if text_m:
         text = text_m.group(1).strip()
         if text:
             sel = f'text={text}'
+            return sel, f'HTML detected — using selector: {sel}'
+
+    # 8. tag + type + value for button-like inputs (submit/button/reset)
+    if tag:
+        type_m = re.search(r'\btype=(["\'])([^"\']+)\1', t)
+        val_m = re.search(r'\bvalue=(["\'])([^"\']+)\1', t)
+        type_val = type_m.group(2) if type_m else ''
+        if type_val in ('submit', 'button', 'reset') and val_m:
+            sel = f'{tag}[type="{type_val}"]{_attr("value", val_m.group(2))}'
+            return sel, f'HTML detected — using selector: {sel}'
+        if type_m:
+            sel = f'{tag}[type="{type_val}"]'
             return sel, f'HTML detected — using selector: {sel}'
 
     return t, 'HTML detected but could not derive a selector — passing as-is'
