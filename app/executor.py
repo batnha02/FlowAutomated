@@ -373,10 +373,51 @@ async def _do_open_app(target: str, os_name: str) -> None:
         await asyncio.sleep(0.2)
 
 
+_JQUERY_PSEUDO_MAP = {
+    'input': 'is(input,textarea,select,button)',
+    'button': 'is(button,input[type="button"],input[type="submit"],input[type="reset"])',
+    'checkbox': 'is(input[type="checkbox"])',
+    'radio': 'is(input[type="radio"])',
+    'text': 'is(input[type="text"])',
+    'password': 'is(input[type="password"])',
+    'submit': 'is(input[type="submit"],button[type="submit"])',
+    'reset': 'is(input[type="reset"])',
+    'file': 'is(input[type="file"])',
+    'image': 'is(input[type="image"])',
+    'selected': 'is(option:checked)',
+}
+_JQUERY_PSEUDO_RE = re.compile(r':(' + '|'.join(_JQUERY_PSEUDO_MAP) + r')\b')
+
+
+def _sanitize_raw_selector(t: str) -> tuple[str, str | None]:
+    # Fix selectors copied from legacy/enterprise apps (e.g. Nexacro's dotted
+    # component ids, jQuery-only pseudo-classes like :input) that native
+    # querySelectorAll rejects with a SyntaxError.
+    fixed = t
+    warn = None
+
+    new_fixed = _JQUERY_PSEUDO_RE.sub(lambda m: ':' + _JQUERY_PSEUDO_MAP[m.group(1)], fixed)
+    if new_fixed != fixed:
+        warn = f'jQuery-only pseudo-class rewritten for native CSS: {new_fixed}'
+        fixed = new_fixed
+
+    # Nexacro-style dotted id (e.g. "#mainframe.vFrameSet1.loginFrame...edUserID")
+    # — the dots are part of the literal id, not chained classes, so escape
+    # them instead of letting the browser parse each segment as a class.
+    id_m = re.match(r'^#([^\s.:#\[\]]+(?:\.[^\s.:#\[\]]+){2,})', fixed)
+    if id_m:
+        raw_id = id_m.group(1)
+        escaped = raw_id.replace('.', r'\.')
+        fixed = '#' + escaped + fixed[1 + len(raw_id):]
+        warn = (warn + ' | ' if warn else '') + f'Dotted id treated as literal — using: #{escaped}'
+
+    return fixed, warn
+
+
 def _resolve_selector(target: str) -> tuple[str, str | None]:
     t = target.strip()
     if not t.startswith('<'):
-        return t, None
+        return _sanitize_raw_selector(t)
 
     tag_m = re.match(r'<(\w+)', t)
     tag = tag_m.group(1).lower() if tag_m else ''
