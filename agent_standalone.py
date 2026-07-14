@@ -269,6 +269,7 @@ _JQUERY_PSEUDO_MAP = {
     'selected': 'is(option:checked)',
 }
 _JQUERY_PSEUDO_RE = re.compile(r':(' + '|'.join(_JQUERY_PSEUDO_MAP) + r')\b')
+_SAME_ELEM_PSEUDO_RE = re.compile(r'^(#[^\s]+?):(' + '|'.join(_JQUERY_PSEUDO_MAP) + r')\b(.*)$')
 
 
 def _sanitize_raw_selector(t: str) -> tuple[str, str | None]:
@@ -278,11 +279,6 @@ def _sanitize_raw_selector(t: str) -> tuple[str, str | None]:
     fixed = t
     warn = None
 
-    new_fixed = _JQUERY_PSEUDO_RE.sub(lambda m: ':' + _JQUERY_PSEUDO_MAP[m.group(1)], fixed)
-    if new_fixed != fixed:
-        warn = f'jQuery-only pseudo-class rewritten for native CSS: {new_fixed}'
-        fixed = new_fixed
-
     # Nexacro-style dotted id (e.g. "#mainframe.vFrameSet1.loginFrame...edUserID")
     # — the dots are part of the literal id, not chained classes, so escape
     # them instead of letting the browser parse each segment as a class.
@@ -291,7 +287,25 @@ def _sanitize_raw_selector(t: str) -> tuple[str, str | None]:
         raw_id = id_m.group(1)
         escaped = raw_id.replace('.', r'\.')
         fixed = '#' + escaped + fixed[1 + len(raw_id):]
-        warn = (warn + ' | ' if warn else '') + f'Dotted id treated as literal — using: #{escaped}'
+        warn = f'Dotted id treated as literal — using: #{escaped}'
+
+    # jQuery-only pseudo-class glued directly to an id (e.g. "#id:input", no
+    # space) means "this element, filtered by type" in jQuery. But component
+    # frameworks (Nexacro etc.) usually put the id on a wrapper element with
+    # the real <input>/<select>/... nested inside, so match either the
+    # element itself or any descendant — not only a same-element compound.
+    same_elem_m = _SAME_ELEM_PSEUDO_RE.match(fixed)
+    if same_elem_m:
+        id_part, pseudo_kind, rest = same_elem_m.groups()
+        translated = _JQUERY_PSEUDO_MAP[pseudo_kind]
+        fixed = f':is({id_part}, {id_part} *):{translated}{rest}'
+        note = f'jQuery-only pseudo-class rewritten (self-or-descendant): {fixed}'
+        warn = (warn + ' | ' if warn else '') + note
+    else:
+        new_fixed = _JQUERY_PSEUDO_RE.sub(lambda m: ':' + _JQUERY_PSEUDO_MAP[m.group(1)], fixed)
+        if new_fixed != fixed:
+            warn = (warn + ' | ' if warn else '') + f'jQuery-only pseudo-class rewritten for native CSS: {new_fixed}'
+            fixed = new_fixed
 
     return fixed, warn
 
